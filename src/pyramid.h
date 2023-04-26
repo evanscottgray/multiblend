@@ -164,9 +164,9 @@ void Pyramid::OutPlanar8 _OP_{
 		if (ey == levels[level].height) ey--;
 	}
 
-	dst_p += (sy - (level ? 1 : 0)) * pitch;
+	dst_p += (size_t)(sy - (level ? 1 : 0)) * pitch;
 
-	p_pt += m128_pitch * sy;
+	p_pt += (size_t)m128_pitch * sy;
 
 	__m128 dither_add;
 
@@ -518,3 +518,13 @@ void Pyramid::Out(T dst_p, int pitch, bool gamma, bool dither, bool clamp, int l
 
 	threadpool->Wait();
 }
+
+#undef PLL
+#undef   N
+#undef   G
+#undef   D
+#undef   C
+#undef  DG
+#undef  CG
+#undef  CD
+#undef CDG

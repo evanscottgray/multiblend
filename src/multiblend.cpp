@@ -1166,7 +1166,7 @@ int main(int argc, char* argv[]) {
 		for (i = 0; i < n_images; ++i) {
 			threadpool->Queue([=] {
 				ShrinkMasks(images[i]->masks, blend_levels);
-				});
+			});
 		}
 		threadpool->Wait();
 

@@ -28,7 +28,7 @@ Pyramid::Pyramid(int width, int height, int _levels, int x, int y, bool _no_allo
 		bool x_shift = (x - b)&(req_alignment - 1);
 		bool y_shift = (y - b)&(req_alignment - 1);
 		int pitch = (width + x_shift + 7) & ~7;
-		size_t bytes = pitch * ((height + y_shift + 3) & ~3) * sizeof(float);
+		size_t bytes = (size_t)pitch * ((height + y_shift + 3) & ~3) * sizeof(float);
 		total_bytes += bytes;
 
 		if (shared) {
@@ -313,7 +313,7 @@ void Pyramid::CopyPlanarThread_16bit(uint16_t* src_p, int pitch, bool gamma, int
 		p_p = rp_p;
 		if (gamma) {
 			for (x = 0; x < eights; ++x) {
-				pixels = _mm_load_si128(src_pp_m++);
+				pixels = _mm_loadu_si128(src_pp_m++);
 				fpixels = _mm_cvtepi32_ps(_mm_shuffle_epi8(pixels, shuffle1));
 				_mm_store_ps((float*)p_p++, _mm_mul_ps(fpixels, fpixels));
 
@@ -322,7 +322,7 @@ void Pyramid::CopyPlanarThread_16bit(uint16_t* src_p, int pitch, bool gamma, int
 			}
 		} else {
 			for (x = 0; x < eights; ++x) {
-				pixels = _mm_load_si128(src_pp_m++);
+				pixels = _mm_loadu_si128(src_pp_m++);
 				_mm_store_ps((float*)p_p++, _mm_cvtepi32_ps(_mm_shuffle_epi8(pixels, shuffle1)));
 
 				_mm_store_ps((float*)p_p++, _mm_cvtepi32_ps(_mm_shuffle_epi8(pixels, shuffle2)));
@@ -394,7 +394,7 @@ void Pyramid::Subsample(int sub_w, int sub_h, Pyramid* source) {
 	int x, y;
 	int p = 0;
 	__m128* in = (__m128*)source->levels[0].data;
-	__m128* Out = (__m128*)levels[0].data;
+	__m128* out = (__m128*)levels[0].data;
 	__m128** temp_lines = source->lines;
 	__m128* line = temp_lines[0];
 	int m128_pitch_in = source->levels[0].m128_pitch;
@@ -432,9 +432,9 @@ void Pyramid::Subsample(int sub_w, int sub_h, Pyramid* source) {
 		}
 		switch (sub_w) {
 			case 2: Subsample_Squeeze(line, line, m128_pitch_in, mid_pitch, NULL);
-			case 1: Subsample_Squeeze(line, Out, mid_pitch, m128_pitch_out, &mul);
+			case 1: Subsample_Squeeze(line, out, mid_pitch, m128_pitch_out, &mul);
 		}
-		Out += m128_pitch_out;
+		out += m128_pitch_out;
 	}
 }
 
@@ -951,22 +951,21 @@ float Pyramid::Average() {
 * Add
 ***********************************************************************/
 void Pyramid::Add(float add, int _levels) {
-	int i, t;
 	__m128 __add = _mm_set_ps1(add);
 
 	int lim = (std::min)(_levels, (int)levels.size() - 1);
 
-	for (i = 0; i < lim; ++i) {
-		__m128* data = (__m128*)levels[i].data;
+	for (int l = 0; l < lim; ++l) {
+		__m128* data = (__m128*)levels[l].data;
 
-		for (t = 0; t < (int)levels[0].bands.size() - 1; ++t) {
+		for (int t = 0; t < (int)levels[l].bands.size() - 1; ++t) {
 			threadpool->Queue([=]() {
-				__m128* data = (__m128*)levels[i].data + levels[i].bands[t] * levels[i].m128_pitch;
-				for (int y = levels[i].bands[t]; y < levels[i].bands[t + 1]; ++y) {
-					for (int x = 0; x < levels[i].m128_pitch; ++x) {
+				__m128* data = (__m128*)levels[l].data + levels[l].bands[t] * levels[l].m128_pitch;
+				for (int y = levels[l].bands[t]; y < levels[l].bands[t + 1]; ++y) {
+					for (int x = 0; x < levels[l].m128_pitch; ++x) {
 						_mm_store_ps((float*)&data[x], _mm_add_ps(__add, data[x]));
 					}
-					data += levels[i].m128_pitch;
+					data += levels[l].m128_pitch;
 				}
 			});
 		}
@@ -1186,7 +1185,7 @@ void Pyramid::BlurXThread(float radius, Pyramid* transpose, int sy, int ey) {
 	float* line1 = line0 + levels[0].pitch;
 	float* line2 = line1 + levels[0].pitch;
 	float* line3 = line2 + levels[0].pitch;
-	float* Out = transpose->levels[0].data + sy;
+	float* out = transpose->levels[0].data + sy;
 	__m128 temp1, temp2;
 
 	int iradius = (int)floor(radius);
@@ -1196,7 +1195,7 @@ void Pyramid::BlurXThread(float radius, Pyramid* transpose, int sy, int ey) {
 
 	int left, right;
 
-	int fours = (ey-sy+3) >> 2;
+	int fours = (ey-sy+3) >> 2; // +3 is probably not necessary because all bands are mod 4
 
 	if (iradius < levels[0].width >> 1) {
 		for (y = 0; y < fours; ++y) {
@@ -1217,7 +1216,7 @@ void Pyramid::BlurXThread(float radius, Pyramid* transpose, int sy, int ey) {
 
 			for (i = 0; i <= iradius; ++i) {
 				BLUR_SSE_GET_RIGHT;
-				_mm_store_ps(&Out[o], _mm_add_ps(acc, _mm_mul_ps(_mm_add_ps(temp1, temp2), mul)));
+				_mm_store_ps(&out[o], _mm_add_ps(acc, _mm_mul_ps(_mm_add_ps(temp1, temp2), mul)));
 				o += transpose->levels[0].pitch;
 				acc = _mm_add_ps(_mm_sub_ps(temp2, temp1), acc);
 				++x;
@@ -1225,7 +1224,7 @@ void Pyramid::BlurXThread(float radius, Pyramid* transpose, int sy, int ey) {
 
 			while (right < levels[0].width) {
 				BLUR_SSE_GET_RIGHT;
-				_mm_store_ps(&Out[o], _mm_add_ps(acc, _mm_mul_ps(_mm_add_ps(temp1, temp2), mul)));
+				_mm_store_ps(&out[o], _mm_add_ps(acc, _mm_mul_ps(_mm_add_ps(temp1, temp2), mul)));
 				o += transpose->levels[0].pitch;
 				BLUR_SSE_GET_LEFT
 				acc = _mm_add_ps(_mm_sub_ps(temp2, temp1), acc);
@@ -1233,7 +1232,7 @@ void Pyramid::BlurXThread(float radius, Pyramid* transpose, int sy, int ey) {
 			}
 
 			while (x < levels[0].width) {
-				_mm_store_ps(&Out[o], _mm_add_ps(acc, _mm_mul_ps(_mm_add_ps(temp1, temp2), mul)));
+				_mm_store_ps(&out[o], _mm_add_ps(acc, _mm_mul_ps(_mm_add_ps(temp1, temp2), mul)));
 				o += transpose->levels[0].pitch;
 				BLUR_SSE_GET_LEFT;
 				acc = _mm_add_ps(_mm_sub_ps(temp2, temp1), acc);
@@ -1244,7 +1243,7 @@ void Pyramid::BlurXThread(float radius, Pyramid* transpose, int sy, int ey) {
 			line1 += levels[0].pitch << 2;
 			line2 += levels[0].pitch << 2;
 			line3 += levels[0].pitch << 2;
-			Out += 4;
+			out += 4;
 		}
 	} else {
 // if radius is wider than image
@@ -1271,7 +1270,7 @@ void Pyramid::BlurXThread(float radius, Pyramid* transpose, int sy, int ey) {
 					BLUR_SSE_GET(temp2, right);
 					++right;
 				}
-				_mm_store_ps(&Out[o], _mm_add_ps(acc, _mm_mul_ps(_mm_add_ps(temp1, temp2), mul)));
+				_mm_store_ps(&out[o], _mm_add_ps(acc, _mm_mul_ps(_mm_add_ps(temp1, temp2), mul)));
 				o += transpose->levels[0].pitch;
 				if (left>0) BLUR_SSE_GET(temp1, left);
 				++left;
@@ -1282,7 +1281,7 @@ void Pyramid::BlurXThread(float radius, Pyramid* transpose, int sy, int ey) {
 			line1 += levels[0].pitch << 2;
 			line2 += levels[0].pitch << 2;
 			line3 += levels[0].pitch << 2;
-			Out += 4;
+			out += 4;
 		}
 	}
 }

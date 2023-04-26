@@ -20,7 +20,7 @@ public:
 				data = (uint8_t*)malloc(size);
 			} else if (y < height) {
 				int prev_size = size;
-				int new_size1 = (size / y) * height + (width << 4);
+				int new_size1 = (p / y) * height + (width << 4);
 				int new_size2 = size << 1;
 				size = (std::max)(new_size1, new_size2);
 				data = (uint8_t*)realloc(data, size);
