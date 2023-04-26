@@ -638,7 +638,7 @@ void Pyramid::Squeeze(__m128* line, __m128* lo, int m128_pitch_lo, int m128_pitc
 	const __m128 four = _mm_set_ps1(4);
 	const __m128 six = _mm_set_ps1(6);
 
-	if (x_shift) memmove(((uint8_t*)line) + 4, line, (m128_pitch_hi << 4) - 1);
+	if (x_shift) memmove(&((float*)line)[1], line, (m128_pitch_hi << 4) - 4);
 
 	while (lo_x < m128_pitch_lo) {
 		if (hi_x >= m128_pitch_hi) { // was >= ... + 1

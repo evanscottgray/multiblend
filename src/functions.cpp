@@ -87,7 +87,7 @@ public:
 
 	~Flex() {
 		free(data);
-		delete rows;
+		delete[] rows;
 	}
 
 	uint8_t* data = NULL;
@@ -421,7 +421,7 @@ void ShrinkMasks(std::vector<Flex*>& masks, int n_levels) {
 		}
 	}
 
-	for (i = 0; i < 5; ++i) delete real_lines[i];
+	for (i = 0; i < 5; ++i) delete[] real_lines[i];
 }
 
 /***********************************************************************
