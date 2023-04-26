@@ -22,7 +22,11 @@
 #include <stdint.h>
 #include <vector>
 #include <algorithm>
+#ifdef __APPLE__
+#define memalign(a,b) malloc((b))
+#else
 #include <malloc.h>
+#endif
 
 #include "tiffio.h"
 #include "jpeglib.h"
@@ -273,7 +277,7 @@ int main(int argc, char* argv[]) {
 		else if (!strcmp(my_argv[i], "--gamma"))     gamma = true;
 		else if (!strcmp(my_argv[i], "--no-dither") || !strcmp(my_argv[i], "--nodither")) dither = false;
 		//		else if (!strcmp(my_argv[i], "--force"))     force_coverage = true;
-		else if (!strcmp(my_argv[i], "-f")) Output(0, "ignoring Enblend option -f\n");
+		else if (!strncmp(my_argv[i], "-f", 2)) Output(0, "ignoring Enblend option -f\n");
 		else if (!strcmp(my_argv[i], "-a")) Output(0, "ignoring Enblend option -a\n");
 		else if (!strcmp(my_argv[i], "--no-ciecam")) Output(0, "ignoring Enblend option --no-ciecam\n");
 		else if (!strcmp(my_argv[i], "--primary-seam-generator")) {
