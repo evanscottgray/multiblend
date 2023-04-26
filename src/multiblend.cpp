@@ -1462,7 +1462,7 @@ int main(int argc, char* argv[]) {
 			timer.Start();
 
 			try {
-				output_channels[c] = MapAlloc::Alloc(((int64)width * height) << (output_bpp >> 4));
+				output_channels[c] = MapAlloc::Alloc(((size_t)width * height) << (output_bpp >> 4));
 			} catch (char* e) {
 				printf("%s\n", e);
 				exit(EXIT_FAILURE);

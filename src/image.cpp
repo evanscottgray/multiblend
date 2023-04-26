@@ -113,7 +113,6 @@ void Image::Open() {
 			if (bpp != 8 && bpp != 16) {
 				printf("Invalid bpp %d (%s)", bpp, filename);
 				printf("%d, %d\n", tiff_width, tiff_height);
-				getchar();
 				TIFFGetField(tiff, TIFFTAG_BITSPERSAMPLE, &bpp);
 				if (bpp != 8 && bpp != 16) die("Invalid bpp %d (%s)", bpp, filename);
 			}
@@ -174,6 +173,7 @@ void Image::Open() {
 					first_strip = 0;
 					end_strip = TIFFNumberOfStrips(tiff);
 				}
+				_TIFFfree(buf);
 			}
 
 			ypos += first_strip * rows_per_strip;
@@ -680,7 +680,7 @@ void Image::Read(void* data, bool gamma) {
 /***********************************************************************
 * Extract channels
 ***********************************************************************/
-	size_t channel_bytes = (width * height) << (bpp >> 4);
+	size_t channel_bytes = ((size_t)width * height) << (bpp >> 4);
 
 	for (int c = 0; c < 3; ++c) {
 		channels.push_back(new Channel(channel_bytes));
@@ -781,7 +781,7 @@ void Image::MaskPng(int i) {
 	int width = masks[0]->width;
 	int height = masks[0]->height; // +1 + masks[1]->height;
 
-	size_t size = width * height;
+	size_t size = (size_t)width * height;
 	uint8_t* temp = (uint8_t*)malloc(size);
 	memset(temp, 32, size);
 
