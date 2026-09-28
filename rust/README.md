@@ -16,8 +16,14 @@ cargo test       # a few unit tests for helpers the black-box suite only reaches
   pixels and seam maps, across `tools/sweep.py` (168 scene/option combinations) and a 5200×3700
   four-image blend. The only differences are the deliberate fixes, such as the ×257 scaling when the
   output depth differs from the input.
-- **Speed:** on the 5200×3700 blend it runs in about 1.3–1.6 s, against 1.7 s for the C++ build. It
-  uses all cores; the reference used 2 threads.
+- **Speed:** on eight overlapping 4000×3000 LZW TIFFs (a 13,700×5,400 blend), about 6.8 s against
+  8.4 s for the C++ build, on a 4-core laptop. Input images are decoded in parallel, and the
+  pyramid stages are row-parallel and SIMD-friendly. The pyramid stages are now limited by memory
+  bandwidth rather than arithmetic: an AVX2 build (`target-cpu=native`) is no faster, so the
+  portable build is kept. The remaining time is mostly TIFF decoding and LZW encoding.
+- **Memory:** reading several images at once costs memory. Reads are batched to stay under
+  `READ_BUDGET` (1 GiB of transient buffers, in `main.rs`). The workload above peaks at about
+  1.8 GB, against 1.3 GB for the C++ build and for fully sequential reading.
 
 ## Layout
 

@@ -12,14 +12,6 @@ pub enum Plane {
     U16(Vec<u16>),
 }
 
-impl Plane {
-    pub fn get(&self, i: usize) -> u32 {
-        match self {
-            Plane::U8(v) => v[i] as u32,
-            Plane::U16(v) => v[i] as u32,
-        }
-    }
-}
 
 pub struct Image {
     pub filename: String,
@@ -77,9 +69,16 @@ impl Image {
         }
     }
 
+    /// Rough peak bytes of transient memory while reading (decoded samples, packed
+    /// pixels, inpainting distances, channel planes); used to bound parallel reads.
+    pub fn read_cost(&self) -> usize {
+        let bytes = self.bpp as usize / 8;
+        self.info.width * self.info.height * (self.info.spp as usize * bytes * 2 + 4 + 3 * bytes)
+    }
+
     /// Decode, trim, inpaint and extract channels. `index` names debug dumps.
+    /// Safe to run for several images in parallel.
     pub fn read(&mut self, index: usize) {
-        out!(1, "Processing {}...", self.filename);
         let samples = match self.kind {
             ImageType::Tiff => io::tiff_read(&self.filename),
             ImageType::Png => io::png_read(&self.filename),
@@ -129,7 +128,7 @@ impl Image {
                 }
             }
         }
-        out!(1, "\n");
+        out!(1, "Processing {}...\n", self.filename);
     }
 
     fn process_rgba<P: Copy>(&mut self, px: &mut [P], fw: usize, fh: usize, opaque: impl Fn(P) -> bool, chan: impl Fn(P, u32) -> u32, _index: usize) {

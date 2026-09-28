@@ -22,6 +22,9 @@ use util::{Timer, dump, dump_enabled, f32_bytes};
 /// Levels are capped so level positions and `>> level` shifts stay in range.
 const MAX_LEVELS: i32 = 29;
 
+/// Transient memory allowed for images being read at the same time.
+const READ_BUDGET: usize = 1 << 30;
+
 struct WrapPyramid {
     py: Pyramid,
     masks: Vec<MaskLevel>,
@@ -104,8 +107,19 @@ fn main() {
         output_bpp = 8;
     }
 
-    for (i, img) in images.iter_mut().enumerate() {
-        img.read(i);
+    // Read images in parallel, in batches whose transient memory stays under a budget.
+    {
+        let mut indexed: Vec<(usize, &mut Image)> = images.iter_mut().enumerate().collect();
+        while !indexed.is_empty() {
+            let (mut n, mut cost) = (0, 0);
+            while n < indexed.len() && n < rayon::current_num_threads() && (n == 0 || cost + indexed[n].1.read_cost() <= READ_BUDGET) {
+                cost += indexed[n].1.read_cost();
+                n += 1;
+            }
+            let rest = indexed.split_off(n);
+            indexed.into_par_iter().for_each(|(i, img)| img.read(i));
+            indexed = rest;
+        }
     }
 
     // Tighten
@@ -399,33 +413,39 @@ fn main() {
         let bytes = output_bpp as usize / 8;
         let big_endian = opts.output_type == ImageType::Png;
         let row_bytes = width * spp * bytes;
+        let planes8: Vec<&[u8]> = out_planes.iter().filter_map(|p| if let Plane::U8(v) = p { Some(&v[..]) } else { None }).collect();
+        let planes16: Vec<&[u16]> = out_planes.iter().filter_map(|p| if let Plane::U16(v) = p { Some(&v[..]) } else { None }).collect();
         let fill_row = |y: usize, row: &mut [u8]| {
+            let base = y * width;
             let mut x = 0usize;
-            let mut p = 0usize;
-            let put = |row: &mut [u8], p: &mut usize, v: u32| {
-                if bytes == 1 {
-                    row[*p] = v as u8;
-                } else {
-                    let b = if big_endian { (v as u16).to_be_bytes() } else { (v as u16).to_le_bytes() };
-                    row[*p..*p + 2].copy_from_slice(&b);
-                }
-                *p += bytes;
-            };
             for &(len, covered, _) in &seams.coverage[y] {
-                for _ in 0..len {
-                    if covered {
-                        for plane in &out_planes {
-                            put(row, &mut p, plane.get(y * width + x));
+                let (len, px_bytes) = (len as usize, spp * bytes);
+                let dst = &mut row[x * px_bytes..(x + len) * px_bytes];
+                if !covered {
+                    dst.fill(0);
+                } else if bytes == 1 {
+                    let (r, g, b) = (&planes8[0][base + x..], &planes8[1][base + x..], &planes8[2][base + x..]);
+                    for (i, px) in dst.chunks_exact_mut(spp).enumerate() {
+                        px[0] = r[i];
+                        px[1] = g[i];
+                        px[2] = b[i];
+                        if spp == 4 {
+                            px[3] = 0xff;
                         }
-                        if !no_mask {
-                            put(row, &mut p, if bytes == 1 { 0xff } else { 0xffff });
-                        }
-                    } else {
-                        row[p..p + spp * bytes].fill(0);
-                        p += spp * bytes;
                     }
-                    x += 1;
+                } else {
+                    let (r, g, b) = (&planes16[0][base + x..], &planes16[1][base + x..], &planes16[2][base + x..]);
+                    let enc = |v: u16| if big_endian { v.to_be_bytes() } else { v.to_le_bytes() };
+                    for (i, px) in dst.chunks_exact_mut(px_bytes).enumerate() {
+                        px[0..2].copy_from_slice(&enc(r[i]));
+                        px[2..4].copy_from_slice(&enc(g[i]));
+                        px[4..6].copy_from_slice(&enc(b[i]));
+                        if spp == 4 {
+                            px[6..8].copy_from_slice(&[0xff, 0xff]);
+                        }
+                    }
                 }
+                x += len;
             }
         };
 

@@ -109,7 +109,7 @@ impl Pyramid {
             d.fill(0.0);
             return;
         }
-        d.par_iter_mut().for_each(|v| *v *= mul);
+        d.par_chunks_mut(l.pitch).for_each(|row| row.iter_mut().for_each(|v| *v *= mul));
     }
 
     /// Add a constant to levels below `n` (the reference only ever adds to level 0,
@@ -118,7 +118,7 @@ impl Pyramid {
         let lim = n.min(self.levels.len() - 1);
         for l in 0..lim {
             let lev = &self.levels[l];
-            self.data[l][..lev.pitch * lev.height].par_iter_mut().for_each(|v| *v += add);
+            self.data[l][..lev.pitch * lev.height].par_chunks_mut(lev.pitch).for_each(|row| row.iter_mut().for_each(|v| *v += add));
         }
     }
 
@@ -130,10 +130,10 @@ impl Pyramid {
             let ll = &self.levels[l + 1];
             let lo_pitch = ll.pitch;
             lo_data[0][..lo_pitch * ll.height].par_chunks_mut(lo_pitch).enumerate().for_each_init(
-                || vec![0f32; hl.pitch],
-                |line, (y, lo)| {
+                || (vec![0f32; hl.pitch], Vec::new(), Vec::new()),
+                |(line, ev, od), (y, lo)| {
                     let mul = vertical_line(hi, hl, ll.height, y, line);
-                    squeeze(line, lo, mul, hl.x_shift);
+                    squeeze(line, lo, mul, hl.x_shift, ev, od);
                 },
             );
         }
@@ -150,28 +150,42 @@ impl Pyramid {
             let ul = &self.levels[l];
             let ll = &self.levels[l + 1];
             let pitch = ul.pitch;
-            up[..pitch * ul.height].par_chunks_mut(pitch).enumerate().for_each_init(
-                || (vec![0f32; pitch], vec![0f32; pitch], vec![0f32; pitch]),
-                |(t1, t2, t3), (y, hi)| {
-                    let s = y + ul.y_shift as usize;
-                    let lo_row = |k: usize| {
-                        let k = k.min(ll.rows - 1);
-                        &lo[k * ll.pitch..(k + 1) * ll.pitch]
+            let ys = ul.y_shift as usize;
+
+            // Upper rows are processed in bands. Each band expands the lower rows it
+            // needs once, into a reused per-thread buffer: upper row y reads expanded
+            // lower rows (y + ys) / 2 ..= (y + ys) / 2 + 2.
+            const BAND: usize = 32;
+            up[..pitch * ul.height].par_chunks_mut(pitch * BAND).enumerate().for_each_init(
+                || (Vec::new(), Vec::new()),
+                |(expanded, padded), (b, band)| {
+                    let y0 = b * BAND;
+                    let rows = band.len() / pitch;
+                    let k0 = (y0 + ys) / 2;
+                    let k1 = ((y0 + rows - 1 + ys) / 2 + 2).min(ll.rows - 1);
+                    expanded.resize((k1 + 1 - k0) * pitch, 0.0);
+                    for k in k0..=k1 {
+                        let row = &mut expanded[(k - k0) * pitch..(k - k0 + 1) * pitch];
+                        expand(&lo[k * ll.pitch..(k + 1) * ll.pitch], row, ul.x_shift, padded);
+                    }
+                    let ex = |k: usize| {
+                        let k = k.min(k1) - k0;
+                        &expanded[k * pitch..(k + 1) * pitch]
                     };
-                    if s & 1 == 0 {
-                        let k = s / 2 + 1;
-                        expand(lo_row(k - 1), t1, ul.x_shift);
-                        expand(lo_row(k), t2, ul.x_shift);
-                        expand(lo_row(k + 1), t3, ul.x_shift);
-                        for x in 0..pitch {
-                            hi[x] = ((t1[x] + t3[x]) * 0.125f32 + t2[x] * 0.75f32) - hi[x];
-                        }
-                    } else {
-                        let k = s.div_ceil(2);
-                        expand(lo_row(k), t1, ul.x_shift);
-                        expand(lo_row(k + 1), t2, ul.x_shift);
-                        for x in 0..pitch {
-                            hi[x] = (t1[x] + t2[x]) * 0.5f32 - hi[x];
+                    for (r, hi) in band.chunks_mut(pitch).enumerate() {
+                        let s = y0 + r + ys;
+                        if s & 1 == 0 {
+                            let k = s / 2 + 1;
+                            let (t1, t2, t3) = (ex(k - 1), ex(k), ex(k + 1));
+                            for x in 0..pitch {
+                                hi[x] = ((t1[x] + t3[x]) * 0.125f32 + t2[x] * 0.75f32) - hi[x];
+                            }
+                        } else {
+                            let k = s.div_ceil(2);
+                            let (t1, t2) = (ex(k), ex(k + 1));
+                            for x in 0..pitch {
+                                hi[x] = (t1[x] + t2[x]) * 0.5f32 - hi[x];
+                            }
                         }
                     }
                 },
@@ -199,19 +213,21 @@ impl Pyramid {
         let l = &self.levels[0];
         let (w, pitch) = (l.width, l.pitch);
         let data = &self.data[0];
+        let zero = [0f32; 4];
         dst.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
             let src = &data[y * pitch..y * pitch + w];
-            let dith = &DITHER[y & 3];
-            for x in 0..w {
-                let mut v = maxps(src[x], 0.0);
-                if gamma {
-                    v = v.sqrt();
+            let dith = if dither { &DITHER[y & 3] } else { &zero };
+            // Chunks start at multiples of 4, so lane == x & 3.
+            for (o4, s4) in row.chunks_mut(4).zip(src.chunks(4)) {
+                for (l, (o, &s)) in o4.iter_mut().zip(s4).enumerate() {
+                    let mut v = maxps(s, 0.0);
+                    if gamma {
+                        v = v.sqrt();
+                    }
+                    // Adding 0.0 when not dithering leaves every value unchanged.
+                    v = minps(v + dith[l], max);
+                    *o = conv(round_small(v) as i32);
                 }
-                if dither {
-                    v += dith[x & 3];
-                }
-                v = minps(v, max);
-                row[x] = conv(cvtps(v));
             }
         });
     }
@@ -226,8 +242,17 @@ fn maxps(a: f32, b: f32) -> f32 {
 fn minps(a: f32, b: f32) -> f32 {
     if a < b { a } else { b }
 }
-/// `_mm_cvtps_epi32`: round half to even; out of range or NaN -> i32::MIN.
+/// Round half to even for |v| <= 2^22 without a libm call: in f32, adding
+/// 1.5 * 2^23 lands in a binade with unit spacing, so the hardware's
+/// round-to-nearest-even does the rounding. Matches `cvtps` in that range.
 #[inline]
+fn round_small(v: f32) -> f32 {
+    const MAGIC: f32 = 12_582_912.0;
+    (v + MAGIC) - MAGIC
+}
+
+/// `_mm_cvtps_epi32`: round half to even; out of range or NaN -> i32::MIN.
+#[cfg(test)]
 fn cvtps(v: f32) -> i32 {
     let r = v.round_ties_even();
     if (-2147483648.0..2147483648.0).contains(&r) { r as i32 } else { i32::MIN }
@@ -310,40 +335,67 @@ fn vertical_line(hi: &[f32], hl: &Level, lo_height: usize, y: usize, line: &mut 
 }
 
 /// Horizontal 5-tap filter and 2:1 decimation (`Squeeze`).
-fn squeeze(line: &mut [f32], lo: &mut [f32], mul: f32, x_shift: bool) {
+///
+/// Output k is centred on input 2k-2 with edge clamping. Writing the clamped
+/// line as P (P[i + 4] = line[clamp(i)]) and splitting it into even/odd halves
+/// E, O makes the taps contiguous: out[k] uses E[k], O[k], E[k+1], O[k+1], E[k+2].
+fn squeeze(line: &mut [f32], lo: &mut [f32], mul: f32, x_shift: bool, ev: &mut Vec<f32>, od: &mut Vec<f32>) {
     let n = line.len();
     if x_shift {
         line.copy_within(0..n - 1, 1);
     }
-    let e = |j: i64| line[j.clamp(0, n as i64 - 1) as usize];
-    for (k, out) in lo.iter_mut().enumerate() {
-        let c = 2 * k as i64 - 2;
-        let outer = e(c - 2) + e(c + 2);
-        let inner = 4.0f32 * (e(c - 1) + e(c + 1));
-        let center = 6.0f32 * e(c);
-        *out = (outer + (inner + center)) * mul;
+    let k_n = lo.len();
+    let halves = k_n + 2;
+    let p = |i: usize| line[i.saturating_sub(4).min(n - 1)];
+    ev.clear();
+    od.clear();
+    ev.extend((0..halves).map(|j| p(2 * j)));
+    od.extend((0..halves).map(|j| p(2 * j + 1)));
+    let (e0, e1, e2) = (&ev[..k_n], &ev[1..k_n + 1], &ev[2..k_n + 2]);
+    let (o0, o1) = (&od[..k_n], &od[1..k_n + 1]);
+    for k in 0..k_n {
+        let outer = e0[k] + e2[k];
+        let inner = 4.0f32 * (o0[k] + o1[k]);
+        let center = 6.0f32 * e1[k];
+        lo[k] = (outer + (inner + center)) * mul;
     }
 }
 
 /// Expand one lower-level row into the upper level's pitch
 /// (`LaplaceExpand` / `LaplaceExpandShifted`).
-fn expand(lo: &[f32], hi: &mut [f32], shifted: bool) {
+///
+/// Every output lane is `(x0*A + x1*B) + (x2*C + x3*D)` with per-lane constants
+/// (zero terms included, as in the SSE original), which the compiler vectorizes.
+fn expand(lo: &[f32], hi: &mut [f32], shifted: bool, padded: &mut Vec<f32>) {
+    // Unshifted: every lane reads t0..t3 = lo[2m..2m+4].
+    const A: [f32; 4] = [0.125, 0.0, 0.0, 0.0];
+    const B: [f32; 4] = [0.75, 0.5, 0.125, 0.0];
+    const C: [f32; 4] = [0.125, 0.5, 0.75, 0.5];
+    const D: [f32; 4] = [0.0, 0.0, 0.125, 0.5];
+    // Shifted: lanes 0-2 read t0..t3, lane 3 reads t2..t5.
+    const SA: [f32; 4] = [0.0, 0.0, 0.0, 0.125];
+    const SB: [f32; 4] = [0.5, 0.125, 0.0, 0.75];
+    const SC: [f32; 4] = [0.5, 0.75, 0.5, 0.125];
+    const SD: [f32; 4] = [0.0, 0.125, 0.5, 0.0];
+
     let n = lo.len();
-    let e = |i: usize| lo[i.min(n - 1)];
-    for m in 0..hi.len() / 4 {
-        let (t0, t1, t2, t3) = (e(2 * m), e(2 * m + 1), e(2 * m + 2), e(2 * m + 3));
-        let o = &mut hi[4 * m..4 * m + 4];
+    let chunks = hi.len() / 4;
+    padded.clear();
+    padded.extend_from_slice(lo);
+    padded.resize((2 * chunks + 6).max(n), lo[n - 1]);
+    let t = &padded[..];
+    for (m, o) in hi.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        let w = &t[2 * m..2 * m + 6];
         if !shifted {
-            o[0] = (t0 * 0.125 + t1 * 0.75) + (t2 * 0.125 + t3 * 0.0);
-            o[1] = (t0 * 0.0 + t1 * 0.5) + (t2 * 0.5 + t3 * 0.0);
-            o[2] = (t0 * 0.0 + t1 * 0.125) + (t2 * 0.75 + t3 * 0.125);
-            o[3] = (t0 * 0.0 + t1 * 0.0) + (t2 * 0.5 + t3 * 0.5);
+            for l in 0..4 {
+                o[l] = (w[0] * A[l] + w[1] * B[l]) + (w[2] * C[l] + w[3] * D[l]);
+            }
         } else {
-            let (p0, p1, p2, p3) = (t2, t3, e(2 * m + 4), e(2 * m + 5));
-            o[0] = (t0 * 0.0 + t1 * 0.5) + (t2 * 0.5 + t3 * 0.0);
-            o[1] = (t0 * 0.0 + t1 * 0.125) + (t2 * 0.75 + t3 * 0.125);
-            o[2] = (t0 * 0.0 + t1 * 0.0) + (t2 * 0.5 + t3 * 0.5);
-            o[3] = (p0 * 0.125 + p1 * 0.75) + (p2 * 0.125 + p3 * 0.0);
+            let s = [0, 0, 0, 2];
+            for l in 0..4 {
+                let x = &w[s[l]..s[l] + 4];
+                o[l] = (x[0] * SA[l] + x[1] * SB[l]) + (x[2] * SC[l] + x[3] * SD[l]);
+            }
         }
     }
 }
@@ -467,6 +519,18 @@ mod tests {
     fn cvtps_rounds_half_to_even() {
         assert_eq!([0.5f32, 1.5, 2.5, -0.5, 254.5, 255.4999].map(cvtps), [0, 2, 2, 0, 254, 255]);
         assert_eq!(cvtps(f32::NAN), i32::MIN);
+    }
+
+    #[test]
+    fn round_small_matches_cvtps_over_output_range() {
+        // Every half-integer tie and a dense sample of other values in [-0.5, 65536].
+        for i in -2..=2 * 65536 {
+            let v = i as f32 * 0.5;
+            assert_eq!(round_small(v) as i32, cvtps(v), "{v}");
+            for d in [0.0001f32, 0.25, 0.4999, 0.5001] {
+                assert_eq!(round_small(v + d) as i32, cvtps(v + d), "{}", v + d);
+            }
+        }
     }
 
     #[test]

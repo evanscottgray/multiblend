@@ -50,7 +50,7 @@ arithmetic can legitimately differ:
 
 For scale: the reference's own `-O2` build differs from the `-Ofast` goldens by at most 0.004% /
 0.22%. Changing one blend coefficient by 0.8% fails 17 of 18 goldens. Set
-`MULTIBLEND_GOLDEN_EXACT=1` to require bit-exact output.
+`MULTIBLEND_GOLDEN_EXACT=1` to require bit-exact output. Only the `-Ofast` reference build passes that mode: `-O2` builds, including the Rust port, differ by 1 in a few 16-bit and gamma cases. For exact checks of the port, compare against `build/multiblend-ref-O2` with `rust/tools/sweep.py`.
 
 Each golden also stores a digest of its generated inputs. If a numpy, tifffile or imagecodecs
 upgrade changes the synthetic images, the test says so instead of reporting a blend regression.
