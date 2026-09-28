@@ -52,8 +52,10 @@ pub struct Options {
     pub inputs: Vec<Input>,
 }
 
-pub const BANNER: &str = "Multiblend v2.0.0 (c) 2021 David Horman        http://horman.net/multiblend/\n";
-pub const RULE: &str = "----------------------------------------------------------------------------\n";
+pub const BANNER: &str =
+    "Multiblend v2.0.0 (c) 2021 David Horman        http://horman.net/multiblend/\n";
+pub const RULE: &str =
+    "----------------------------------------------------------------------------\n";
 
 fn print_help() -> ! {
     output(1, "\n");
@@ -230,7 +232,11 @@ pub fn parse(argv: Vec<String>) -> Options {
                     die!("Error: Bad --cache-threshold parameter");
                 }
                 if digits != v.len() {
-                    let ok = digits == v.len() - 1 && matches!(v.as_bytes()[digits], b'k' | b'K' | b'm' | b'M' | b'g' | b'G');
+                    let ok = digits == v.len() - 1
+                        && matches!(
+                            v.as_bytes()[digits],
+                            b'k' | b'K' | b'm' | b'M' | b'g' | b'G'
+                        );
                     if !ok {
                         die!("Error: Bad --cache-threshold parameter");
                     }
@@ -326,14 +332,20 @@ pub fn parse(argv: Vec<String>) -> Options {
 
     if o.compression.is_some() {
         if o.output_type != ImageType::Tiff {
-            out!(0, "Warning: non-TIFF output; ignoring TIFF compression setting\n");
+            out!(
+                0,
+                "Warning: non-TIFF output; ignoring TIFF compression setting\n"
+            );
         }
     } else if o.output_type == ImageType::Tiff {
         o.compression = Some(TiffCompression::Lzw);
     }
 
     if o.jpeg_quality != -1 && o.output_type != ImageType::Jpeg && o.output_type != ImageType::Png {
-        out!(0, "Warning: non-JPEG/PNG output; ignoring compression quality setting\n");
+        out!(
+            0,
+            "Warning: non-JPEG/PNG output; ignoring compression quality setting\n"
+        );
     }
 
     if (o.jpeg_quality < -1 || o.jpeg_quality > 9) && o.output_type == ImageType::Png {
@@ -356,13 +368,18 @@ pub fn parse(argv: Vec<String>) -> Options {
 
     while i < n {
         if let Some(last) = o.inputs.last_mut()
-            && let Some((x, y)) = parse_xy(&a[i]) {
-                last.xpos_add = x;
-                last.ypos_add = y;
-                i += 1;
-                continue;
-            }
-        o.inputs.push(Input { filename: a[i].clone(), xpos_add: 0, ypos_add: 0 });
+            && let Some((x, y)) = parse_xy(&a[i])
+        {
+            last.xpos_add = x;
+            last.ypos_add = y;
+            i += 1;
+            continue;
+        }
+        o.inputs.push(Input {
+            filename: a[i].clone(),
+            xpos_add: 0,
+            ypos_add: 0,
+        });
         i += 1;
     }
 
@@ -372,15 +389,24 @@ pub fn parse(argv: Vec<String>) -> Options {
     let n_images = o.inputs.len();
     if o.seamsave.is_some() && n_images > 256 {
         o.seamsave = None;
-        out!(0, "Warning: seam saving not possible with more than 256 images\n");
+        out!(
+            0,
+            "Warning: seam saving not possible with more than 256 images\n"
+        );
     }
     if o.seamload.is_some() && n_images > 256 {
         o.seamload = None;
-        out!(0, "Warning: seam loading not possible with more than 256 images\n");
+        out!(
+            0,
+            "Warning: seam loading not possible with more than 256 images\n"
+        );
     }
     if o.xor.is_some() && n_images > 255 {
         o.xor = None;
-        out!(0, "Warning: XOR map saving not possible with more than 255 images\n");
+        out!(
+            0,
+            "Warning: XOR map saving not possible with more than 255 images\n"
+        );
     }
 
     o

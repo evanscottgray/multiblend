@@ -1,0 +1,198 @@
+# Build dependency-free multiblend binaries for Linux and Windows, run the
+# black-box test suite on each, check bit-exactness against the C++ reference,
+# and publish a GitHub Release for v* tags. See rust/CI_PLAN.md.
+
+name: rust
+
+on:
+  push:
+    branches: [master, rust]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    defaults: { run: { working-directory: rust } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: "rustfmt, clippy" }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: rust }
+      - run: cargo fmt --check
+      - run: cargo clippy --release --all-targets --locked -- -D warnings
+      - run: cargo test --release --locked
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-24.04, target: x86_64-unknown-linux-gnu, exe: multiblend }
+          - { name: linux-arm64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, exe: multiblend }
+          - { name: windows-x86_64, os: windows-2022, target: x86_64-pc-windows-msvc, exe: multiblend.exe }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "${{ matrix.target }}" }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: rust, key: "${{ matrix.target }}" }
+      - name: Build
+        working-directory: rust
+        # Static glibc on Linux (not musl: musl is ~65% slower here, see
+        # rust/CI_PLAN.md). Set per target so it applies only to the --target
+        # artifacts, never to host build scripts or proc macros.
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-feature=+crt-static
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp rust/target/${{ matrix.target }}/release/${{ matrix.exe }} dist/
+      - name: Check the binary is static (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          file dist/multiblend
+          # static or static-pie: no shared-library dependencies and no dynamic loader
+          if readelf -d dist/multiblend | grep -q NEEDED; then
+            echo "::error::binary has shared-library dependencies"; readelf -d dist/multiblend; exit 1
+          fi
+          if readelf -l dist/multiblend | grep -q "Requesting program interpreter"; then
+            echo "::error::binary requires a dynamic loader"; exit 1
+          fi
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Check the binary needs only system DLLs (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $deps = dumpbin /dependents dist\multiblend.exe | Select-String -Pattern '\.dll' | ForEach-Object { $_.Line.Trim() }
+          $deps
+          $bad = $deps | Where-Object { $_ -match '^(vcruntime|msvcp|api-ms-win-crt|ucrtbase)' }
+          if ($bad) { Write-Error "C runtime DLL dependency: $bad"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multiblend-${{ matrix.name }}
+          path: dist/${{ matrix.exe }}
+          if-no-files-found: error
+
+  test:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-24.04, exe: multiblend }
+          - { name: linux-arm64, os: ubuntu-24.04-arm, exe: multiblend }
+          - { name: windows-x86_64, os: windows-2022, exe: multiblend.exe }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: tests/requirements.txt
+      - run: pip install -r tests/requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { name: "multiblend-${{ matrix.name }}", path: bin }
+      - if: runner.os == 'Linux'
+        run: chmod +x bin/multiblend
+      - name: Test suite (port mode, no retries)
+        shell: bash
+        env:
+          MULTIBLEND_BIN: ${{ github.workspace }}/bin/${{ matrix.exe }}
+        run: python -m pytest -ra
+      - name: Smoke test in bare containers (no host libraries)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir smoke
+          python - <<'EOF'
+          import sys, pathlib
+          sys.path.insert(0, "tests")
+          import scenes
+          scenes.two_circles(pathlib.Path("smoke"))
+          EOF
+          cp bin/multiblend smoke/
+          # musl-based images with no glibc at all
+          for image in alpine:3 busybox:musl; do
+            docker run --rm -v "$PWD/smoke:/w" -w /w "$image" ./multiblend -o "out-${image%%:*}.tif" A.tif B.tif
+          done
+          python - <<'EOF'
+          import sys
+          sys.path.insert(0, "tests")
+          import numpy as np
+          from mb import read
+          a, b = read("smoke/out-alpine.tif"), read("smoke/out-busybox.tif")
+          assert a.shape == (72, 112, 4), a.shape
+          assert np.array_equal(a, b)
+          print("container outputs OK", a.shape)
+          EOF
+
+  parity:
+    # Bit-exactness against the C++ reference (built at -O2) on a different OS/libm.
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: tests/requirements.txt
+      - run: pip install -r tests/requirements.txt
+      - run: sudo apt-get update && sudo apt-get install -y g++ libpng-dev libtiff-dev libjpeg-turbo8-dev
+      - name: Build the C++ reference
+        run: python rust/tools/build_dump_reference.py
+      - uses: actions/download-artifact@v4
+        with: { name: multiblend-linux-x86_64, path: bin }
+      - run: chmod +x bin/multiblend
+      - name: Differential sweep (expects only the deliberate depth-fix differences)
+        run: python rust/tools/sweep.py build/multiblend-ref-O2 bin/multiblend
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [lint, test, parity]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - name: Package
+        run: |
+          mkdir release
+          tag="${GITHUB_REF_NAME}"
+          printf 'multiblend %s is free software under the GNU GPL v3 (see LICENSE).\nSource code: %s/%s/tree/%s\n' \
+            "$tag" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$tag" > SOURCE.txt
+          for name in linux-x86_64 linux-arm64 windows-x86_64; do
+            dir="multiblend-$tag-$name"
+            mkdir "$dir"
+            cp artifacts/multiblend-$name/* "$dir/"
+            cp LICENSE README.md SOURCE.txt "$dir/"
+            chmod +x "$dir"/multiblend* || true
+            if [[ $name == windows-* ]]; then
+              zip -qr "release/$dir.zip" "$dir"
+            else
+              tar czf "release/$dir.tar.gz" "$dir"
+            fi
+          done
+          (cd release && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --title "multiblend $GITHUB_REF_NAME" \
+            --notes "Dependency-free builds of the Rust port. Linux binaries are fully static (glibc, Linux 3.2+); the Windows executable needs no Visual C++ runtime but is not code-signed, so SmartScreen may warn. See SOURCE.txt for the source code (GPLv3)."

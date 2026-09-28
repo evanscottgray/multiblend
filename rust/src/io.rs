@@ -58,11 +58,21 @@ fn value_f32(v: &Value) -> Option<f32> {
 
 pub fn tiff_info(filename: &str) -> IoResult<InputInfo> {
     let mut dec = open_tiff(filename)?;
-    let (w, h) = dec.dimensions().map_err(|e| format!("Could not read {filename}: {e}"))?;
+    let (w, h) = dec
+        .dimensions()
+        .map_err(|e| format!("Could not read {filename}: {e}"))?;
     if dec.get_chunk_type() == ChunkType::Tile {
-        return Err(format!("Error: {filename} is a tiled TIFF, which is not supported"));
+        return Err(format!(
+            "Error: {filename} is a tiled TIFF, which is not supported"
+        ));
     }
-    let tag_f32 = |dec: &mut Decoder<_>, tag: Tag| dec.find_tag(tag).ok().flatten().as_ref().and_then(value_f32);
+    let tag_f32 = |dec: &mut Decoder<_>, tag: Tag| {
+        dec.find_tag(tag)
+            .ok()
+            .flatten()
+            .as_ref()
+            .and_then(value_f32)
+    };
 
     let bpp = dec
         .find_tag_unsigned_vec::<u16>(Tag::BitsPerSample)
@@ -70,15 +80,29 @@ pub fn tiff_info(filename: &str) -> IoResult<InputInfo> {
         .flatten()
         .and_then(|v| v.first().copied())
         .unwrap_or(1) as u32;
-    let spp = dec.find_tag_unsigned::<u16>(Tag::SamplesPerPixel).ok().flatten().unwrap_or(1) as u32;
-    let planar = dec.find_tag_unsigned::<u16>(Tag::PlanarConfiguration).ok().flatten().unwrap_or(1);
-    let photometric = dec.find_tag_unsigned::<u16>(Tag::PhotometricInterpretation).ok().flatten().unwrap_or(2);
+    let spp = dec
+        .find_tag_unsigned::<u16>(Tag::SamplesPerPixel)
+        .ok()
+        .flatten()
+        .unwrap_or(1) as u32;
+    let planar = dec
+        .find_tag_unsigned::<u16>(Tag::PlanarConfiguration)
+        .ok()
+        .flatten()
+        .unwrap_or(1);
+    let photometric = dec
+        .find_tag_unsigned::<u16>(Tag::PhotometricInterpretation)
+        .ok()
+        .flatten()
+        .unwrap_or(2);
 
     if bpp != 8 && bpp != 16 {
         return Err(format!("Invalid bpp {bpp} ({filename})"));
     }
     if (spp != 3 && spp != 4) || photometric != 2 || planar != 1 {
-        return Err(format!("Error: {filename}: only RGB and RGBA images with contiguous samples are supported"));
+        return Err(format!(
+            "Error: {filename}: only RGB and RGBA images with contiguous samples are supported"
+        ));
     }
 
     let tiff_xpos = tag_f32(&mut dec, Tag::Unknown(286));
@@ -127,7 +151,8 @@ fn png_reader(filename: &str) -> IoResult<png::Reader<BufReader<File>>> {
     f.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     let mut dec = png::Decoder::new(BufReader::new(f));
     dec.set_transformations(png::Transformations::IDENTITY);
-    dec.read_info().map_err(|e| format!("Error: could not read {filename}: {e}"))
+    dec.read_info()
+        .map_err(|e| format!("Error: could not read {filename}: {e}"))
 }
 
 pub fn png_info(filename: &str) -> IoResult<InputInfo> {
@@ -143,17 +168,36 @@ pub fn png_info(filename: &str) -> IoResult<InputInfo> {
         png::BitDepth::Sixteen => 16,
         _ => return Err(format!("Bad bit depth ({filename})")),
     };
-    Ok(InputInfo { width: info.width as usize, height: info.height as usize, bpp, spp, xpos: 0, ypos: 0, xres: 90.0, yres: 90.0 })
+    Ok(InputInfo {
+        width: info.width as usize,
+        height: info.height as usize,
+        bpp,
+        spp,
+        xpos: 0,
+        ypos: 0,
+        xres: 90.0,
+        yres: 90.0,
+    })
 }
 
 pub fn png_read(filename: &str) -> IoResult<Samples> {
     let mut reader = png_reader(filename)?;
-    let size = reader.output_buffer_size().ok_or_else(|| format!("Error: {filename} is too large"))?;
+    let size = reader
+        .output_buffer_size()
+        .ok_or_else(|| format!("Error: {filename} is too large"))?;
     let mut buf = vec![0u8; size];
-    let frame = reader.next_frame(&mut buf).map_err(|e| format!("Error: could not decode {filename}: {e}"))?;
+    let frame = reader
+        .next_frame(&mut buf)
+        .map_err(|e| format!("Error: could not decode {filename}: {e}"))?;
     buf.truncate(frame.buffer_size());
     match frame.bit_depth {
-        png::BitDepth::Sixteen => Ok(Samples::U16(buf.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]])).collect())),
+        png::BitDepth::Sixteen => Ok(Samples::U16(
+            buf.as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                .collect(),
+        )),
         _ => Ok(Samples::U8(buf)),
     }
 }
@@ -170,16 +214,25 @@ pub fn png_read_indices(filename: &str) -> IoResult<(usize, usize, Vec<u8>)> {
     f.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     let mut dec = png::Decoder::new(f);
     dec.set_transformations(png::Transformations::IDENTITY);
-    let mut reader = dec.read_info().map_err(|_| "Error: Seam PNG problem".to_string())?;
+    let mut reader = dec
+        .read_info()
+        .map_err(|_| "Error: Seam PNG problem".to_string())?;
     let (w, h, ct, bd) = {
         let i = reader.info();
-        (i.width as usize, i.height as usize, i.color_type, i.bit_depth)
+        (
+            i.width as usize,
+            i.height as usize,
+            i.color_type,
+            i.bit_depth,
+        )
     };
     if ct != png::ColorType::Indexed || bd != png::BitDepth::Eight {
         return Err("Error: Incorrect seam PNG format".to_string());
     }
     let mut buf = vec![0u8; reader.output_buffer_size().unwrap_or(0)];
-    reader.next_frame(&mut buf).map_err(|_| "Error: Seam PNG problem".to_string())?;
+    reader
+        .next_frame(&mut buf)
+        .map_err(|_| "Error: Seam PNG problem".to_string())?;
     Ok((w, h, buf))
 }
 
@@ -187,27 +240,46 @@ pub fn png_read_indices(filename: &str) -> IoResult<(usize, usize, Vec<u8>)> {
 // JPEG input
 // ---------------------------------------------------------------------------
 
-fn jpeg_decoder(filename: &str) -> IoResult<zune_jpeg::JpegDecoder<zune_jpeg::zune_core::bytestream::ZCursor<Vec<u8>>>> {
+fn jpeg_decoder(
+    filename: &str,
+) -> IoResult<zune_jpeg::JpegDecoder<zune_jpeg::zune_core::bytestream::ZCursor<Vec<u8>>>> {
     let data = std::fs::read(filename).map_err(|_| format!("Could not open {filename}"))?;
     let options = zune_jpeg::zune_core::options::DecoderOptions::default()
         .jpeg_set_out_colorspace(zune_jpeg::zune_core::colorspace::ColorSpace::RGB);
-    let mut dec = zune_jpeg::JpegDecoder::new_with_options(zune_jpeg::zune_core::bytestream::ZCursor::new(data), options);
-    dec.decode_headers().map_err(|_| format!("Unknown JPEG format ({filename})"))?;
+    let mut dec = zune_jpeg::JpegDecoder::new_with_options(
+        zune_jpeg::zune_core::bytestream::ZCursor::new(data),
+        options,
+    );
+    dec.decode_headers()
+        .map_err(|_| format!("Unknown JPEG format ({filename})"))?;
     Ok(dec)
 }
 
 pub fn jpeg_info(filename: &str) -> IoResult<InputInfo> {
     let dec = jpeg_decoder(filename)?;
-    let info = dec.info().ok_or_else(|| format!("Unknown JPEG format ({filename})"))?;
+    let info = dec
+        .info()
+        .ok_or_else(|| format!("Unknown JPEG format ({filename})"))?;
     if info.width == 0 || info.height == 0 || info.components != 3 {
         return Err(format!("Unknown JPEG format ({filename})"));
     }
-    Ok(InputInfo { width: info.width as usize, height: info.height as usize, bpp: 8, spp: 3, xpos: 0, ypos: 0, xres: 90.0, yres: 90.0 })
+    Ok(InputInfo {
+        width: info.width as usize,
+        height: info.height as usize,
+        bpp: 8,
+        spp: 3,
+        xpos: 0,
+        ypos: 0,
+        xres: 90.0,
+        yres: 90.0,
+    })
 }
 
 pub fn jpeg_read(filename: &str) -> IoResult<Samples> {
     let mut dec = jpeg_decoder(filename)?;
-    dec.decode().map(Samples::U8).map_err(|e| format!("Error: could not decode {filename}: {e:?}"))
+    dec.decode()
+        .map(Samples::U8)
+        .map_err(|e| format!("Error: could not decode {filename}: {e:?}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +317,10 @@ impl TagData {
             TagData::Short(v) => v.iter().flat_map(|x| x.to_le_bytes()).collect(),
             TagData::Long(v) => v.iter().flat_map(|x| x.to_le_bytes()).collect(),
             TagData::Long8(v) => v.iter().flat_map(|x| x.to_le_bytes()).collect(),
-            TagData::Rational(v) => v.iter().flat_map(|(n, d)| n.to_le_bytes().into_iter().chain(d.to_le_bytes())).collect(),
+            TagData::Rational(v) => v
+                .iter()
+                .flat_map(|(n, d)| n.to_le_bytes().into_iter().chain(d.to_le_bytes()))
+                .collect(),
         }
     }
 }
@@ -275,7 +350,11 @@ pub fn to_rational(v: f64) -> (u32, u32) {
         }
         x = 1.0 / frac;
     }
-    if k1 == 0 { (u32::MAX, 1) } else { (h1 as u32, k1 as u32) }
+    if k1 == 0 {
+        (u32::MAX, 1)
+    } else {
+        (h1 as u32, k1 as u32)
+    }
 }
 
 fn packbits_row(row: &[u8], out: &mut Vec<u8>) {
@@ -326,7 +405,16 @@ pub struct TiffWriter {
 
 impl TiffWriter {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(file: File, big: bool, width: usize, height: usize, spp: usize, bits: usize, compression: TiffCompression, meta: TiffMeta) -> IoResult<Self> {
+    pub fn new(
+        file: File,
+        big: bool,
+        width: usize,
+        height: usize,
+        spp: usize,
+        bits: usize,
+        compression: TiffCompression,
+        meta: TiffMeta,
+    ) -> IoResult<Self> {
         let mut file = BufWriter::new(file);
         let header: Vec<u8> = if big {
             let mut h = vec![b'I', b'I', 43, 0, 8, 0, 0, 0];
@@ -336,7 +424,18 @@ impl TiffWriter {
             vec![b'I', b'I', 42, 0, 0, 0, 0, 0]
         };
         file.write_all(&header).map_err(|e| e.to_string())?;
-        Ok(TiffWriter { file, big, width, height, spp, bits, compression, offsets: vec![], counts: vec![], meta })
+        Ok(TiffWriter {
+            file,
+            big,
+            width,
+            height,
+            spp,
+            bits,
+            compression,
+            offsets: vec![],
+            counts: vec![],
+            meta,
+        })
     }
 
     fn pos(&mut self) -> IoResult<u64> {
@@ -349,9 +448,11 @@ impl TiffWriter {
         let row_bytes = self.width * self.spp * self.bits / 8;
         Ok(match self.compression {
             TiffCompression::None => data.to_vec(),
-            TiffCompression::Lzw => weezl::encode::Encoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8)
-                .encode(data)
-                .map_err(|e| e.to_string())?,
+            TiffCompression::Lzw => {
+                weezl::encode::Encoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8)
+                    .encode(data)
+                    .map_err(|e| e.to_string())?
+            }
             TiffCompression::PackBits => {
                 let mut out = Vec::with_capacity(data.len() + data.len() / 64 + 8);
                 for row in data.chunks(row_bytes) {
@@ -385,12 +486,29 @@ impl TiffWriter {
                 }]),
             ),
             (262, TagData::Short(vec![2])),
-            (273, if self.big { TagData::Long8(self.offsets.clone()) } else { TagData::Long(self.offsets.iter().map(|&o| o as u32).collect()) }),
+            (
+                273,
+                if self.big {
+                    TagData::Long8(self.offsets.clone())
+                } else {
+                    TagData::Long(self.offsets.iter().map(|&o| o as u32).collect())
+                },
+            ),
             (277, TagData::Short(vec![self.spp as u16])),
             (278, TagData::Long(vec![ROWS_PER_STRIP as u32])),
-            (279, if self.big { TagData::Long8(self.counts.clone()) } else { TagData::Long(self.counts.iter().map(|&o| o as u32).collect()) }),
+            (
+                279,
+                if self.big {
+                    TagData::Long8(self.counts.clone())
+                } else {
+                    TagData::Long(self.counts.iter().map(|&o| o as u32).collect())
+                },
+            ),
         ];
-        let rational = |code: u16, v: Option<f32>| v.filter(|v| v.is_finite()).map(|v| (code, TagData::Rational(vec![to_rational(v as f64)])));
+        let rational = |code: u16, v: Option<f32>| {
+            v.filter(|v| v.is_finite())
+                .map(|v| (code, TagData::Rational(vec![to_rational(v as f64)])))
+        };
         tags.extend(rational(282, self.meta.xres));
         tags.extend(rational(283, self.meta.yres));
         tags.push((284, TagData::Short(vec![1])));
@@ -458,18 +576,25 @@ impl TiffWriter {
         }
         self.file.write_all(&ifd).map_err(|e| e.to_string())?;
         if self.big {
-            self.file.seek(SeekFrom::Start(8)).map_err(|e| e.to_string())?;
-            self.file.write_all(&ifd_pos.to_le_bytes()).map_err(|e| e.to_string())?;
+            self.file
+                .seek(SeekFrom::Start(8))
+                .map_err(|e| e.to_string())?;
+            self.file
+                .write_all(&ifd_pos.to_le_bytes())
+                .map_err(|e| e.to_string())?;
         } else {
             if ifd_pos > u32::MAX as u64 {
                 return Err("Error: output exceeds 4GB; use --bigtiff".to_string());
             }
-            self.file.seek(SeekFrom::Start(4)).map_err(|e| e.to_string())?;
-            self.file.write_all(&(ifd_pos as u32).to_le_bytes()).map_err(|e| e.to_string())?;
+            self.file
+                .seek(SeekFrom::Start(4))
+                .map_err(|e| e.to_string())?;
+            self.file
+                .write_all(&(ifd_pos as u32).to_le_bytes())
+                .map_err(|e| e.to_string())?;
         }
         self.file.flush().map_err(|e| e.to_string())
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -505,7 +630,12 @@ pub fn seam_palette() -> Vec<u8> {
     pal
 }
 
-pub fn png_write_palette(filename: &str, width: usize, height: usize, indices: &[u8]) -> IoResult<()> {
+pub fn png_write_palette(
+    filename: &str,
+    width: usize,
+    height: usize,
+    indices: &[u8],
+) -> IoResult<()> {
     let f = File::create(filename).map_err(|e| e.to_string())?;
     let mut enc = png::Encoder::new(BufWriter::new(f), width as u32, height as u32);
     enc.set_color(png::ColorType::Indexed);
@@ -518,12 +648,32 @@ pub fn png_write_palette(filename: &str, width: usize, height: usize, indices: &
 }
 
 /// Write RGB/RGBA PNG. `data` holds interleaved samples as big-endian bytes for 16-bit.
-pub fn png_write(file: File, width: usize, height: usize, spp: usize, bits: usize, level: i32, data: &[u8]) -> IoResult<()> {
+pub fn png_write(
+    file: File,
+    width: usize,
+    height: usize,
+    spp: usize,
+    bits: usize,
+    level: i32,
+    data: &[u8],
+) -> IoResult<()> {
     let mut enc = png::Encoder::new(BufWriter::new(file), width as u32, height as u32);
-    enc.set_color(if spp == 4 { png::ColorType::Rgba } else { png::ColorType::Rgb });
-    enc.set_depth(if bits == 16 { png::BitDepth::Sixteen } else { png::BitDepth::Eight });
+    enc.set_color(if spp == 4 {
+        png::ColorType::Rgba
+    } else {
+        png::ColorType::Rgb
+    });
+    enc.set_depth(if bits == 16 {
+        png::BitDepth::Sixteen
+    } else {
+        png::BitDepth::Eight
+    });
     let level = if level < 0 { 3 } else { level };
-    enc.set_deflate_compression(if level == 0 { png::DeflateCompression::NoCompression } else { png::DeflateCompression::Level(level as u8) });
+    enc.set_deflate_compression(if level == 0 {
+        png::DeflateCompression::NoCompression
+    } else {
+        png::DeflateCompression::Level(level as u8)
+    });
     let mut w = enc.write_header().map_err(|e| e.to_string())?;
     w.write_image_data(data).map_err(|e| e.to_string())?;
     w.finish().map_err(|e| e.to_string())
@@ -533,14 +683,26 @@ pub fn png_write(file: File, width: usize, height: usize, spp: usize, bits: usiz
 // JPEG output
 // ---------------------------------------------------------------------------
 
-pub fn jpeg_write(file: File, width: usize, height: usize, quality: i32, rgb: &[u8]) -> IoResult<()> {
+pub fn jpeg_write(
+    file: File,
+    width: usize,
+    height: usize,
+    quality: i32,
+    rgb: &[u8],
+) -> IoResult<()> {
     if width > u16::MAX as usize || height > u16::MAX as usize {
         return Err("Error: image too large for JPEG output".to_string());
     }
     let q = quality.clamp(1, 100) as u8;
     let mut enc = jpeg_encoder::Encoder::new(BufWriter::new(file), q);
     enc.set_sampling_factor(jpeg_encoder::SamplingFactor::F_2_2);
-    enc.encode(rgb, width as u16, height as u16, jpeg_encoder::ColorType::Rgb).map_err(|e| e.to_string())
+    enc.encode(
+        rgb,
+        width as u16,
+        height as u16,
+        jpeg_encoder::ColorType::Rgb,
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -583,9 +745,20 @@ mod tests {
 
     #[test]
     fn rationals_approximate_closely() {
-        for v in [72.0, 300.0, 0.69444, 13.0 / 100.0, 1.0 / 3.0, 12345.678, 1e-6] {
+        for v in [
+            72.0,
+            300.0,
+            0.69444,
+            13.0 / 100.0,
+            1.0 / 3.0,
+            12345.678,
+            1e-6,
+        ] {
             let (n, d) = to_rational(v);
-            assert!(((n as f64 / d as f64) - v).abs() <= v * 1e-6, "{v} -> {n}/{d}");
+            assert!(
+                ((n as f64 / d as f64) - v).abs() <= v * 1e-6,
+                "{v} -> {n}/{d}"
+            );
         }
         assert_eq!(to_rational(0.0), (0, 1));
         assert_eq!(to_rational(72.0), (72, 1));

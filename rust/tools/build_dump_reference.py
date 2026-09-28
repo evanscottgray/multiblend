@@ -129,7 +129,10 @@ static int dump_image_counter = 0;
     s = s.replace(blk, "").replace("\t\tthreads[i].i = i;\n", "\t\tthreads[i].i = i;\n\t\tpthread_create(&threads[i].handle, NULL, TP_Thread, &threads[i]);\n")
     p.write_text(s)
 
-    prefix = subprocess.run(["brew", "--prefix"], capture_output=True, text=True).stdout.strip() or "/usr"
+    try:
+        prefix = subprocess.run(["brew", "--prefix"], capture_output=True, text=True).stdout.strip() or "/usr"
+    except FileNotFoundError:  # no Homebrew (e.g. Linux CI): system libraries
+        prefix = "/usr"
     inc = [f"-I{prefix}/opt/{lib}/include" for lib in ("jpeg-turbo", "libpng", "libtiff")] + [f"-I{prefix}/include"]
     lib = [f"-L{prefix}/opt/{lib}/lib" for lib in ("jpeg-turbo", "libpng", "libtiff")] + [f"-L{prefix}/lib"]
     subprocess.run(["c++", "-std=c++14", "-msse4.1", "-pthread", "-w", "-O2", *inc, *lib, "-o", str(OUT),

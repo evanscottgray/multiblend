@@ -45,10 +45,22 @@ pub fn seam(images: &mut [Image], width: usize, height: usize, opts: &SeamOption
     // The C++ used index 0 here, which made --reverse a no-op (FINDINGS #23).
     let dt_max: u64 = 0x9000_0000_0000_0000 | if opts.reverse { (n - 1) as u64 } else { 0 };
 
-    let mut st: Vec<State> = images.iter().map(|_| State { mask_state: ABSENT, count: 0, limit: 0, cursor: 0 }).collect();
+    let mut st: Vec<State> = images
+        .iter()
+        .map(|_| State {
+            mask_state: ABSENT,
+            count: 0,
+            limit: 0,
+            cursor: 0,
+        })
+        .collect();
     let maskval = |st: &[State], v: u64| -> u64 {
         let idx = (v & 0xffff_ffff) as usize;
-        let s = if idx < st.len() { st[idx].mask_state } else { ABSENT };
+        let s = if idx < st.len() {
+            st[idx].mask_state
+        } else {
+            ABSENT
+        };
         (v & !FLAG) | s
     };
 
@@ -78,7 +90,13 @@ pub fn seam(images: &mut [Image], width: usize, height: usize, opts: &SeamOption
                 }
             }
 
-            let prev_at = |prev: &[u64], x: i64| if x >= 0 && x < w { prev[x as usize] } else { dt_max };
+            let prev_at = |prev: &[u64], x: i64| {
+                if x >= 0 && x < w {
+                    prev[x as usize]
+                } else {
+                    dt_max
+                }
+            };
             let mut x: i64 = w - 1;
             while x >= 0 {
                 let mut min_count = x + 1;
@@ -192,7 +210,11 @@ pub fn seam(images: &mut [Image], width: usize, height: usize, opts: &SeamOption
             }
 
             if y > 0 {
-                backward[y] = this.iter().copied().filter(|v| v & 0xffff_ffff_0000_0000 != 0).collect();
+                backward[y] = this
+                    .iter()
+                    .copied()
+                    .filter(|v| v & 0xffff_ffff_0000_0000 != 0)
+                    .collect();
             } else {
                 row0 = this.clone();
             }
@@ -201,7 +223,11 @@ pub fn seam(images: &mut [Image], width: usize, height: usize, opts: &SeamOption
 
         for img in images.iter() {
             if !img.seam_present {
-                out!(1, "Warning: {} is fully obscured by other images\n", img.filename);
+                out!(
+                    1,
+                    "Warning: {} is fully obscured by other images\n",
+                    img.filename
+                );
             }
         }
     }
@@ -217,7 +243,12 @@ pub fn seam(images: &mut [Image], width: usize, height: usize, opts: &SeamOption
     for s in st.iter_mut() {
         s.cursor = 0;
     }
-    let mut result = SeamResult { coverage: Vec::with_capacity(height), alpha: false, channel_totals: [0; 3], total_pixels: 0 };
+    let mut result = SeamResult {
+        coverage: Vec::with_capacity(height),
+        alpha: false,
+        channel_totals: [0; 3],
+        total_pixels: 0,
+    };
     let mut this = row0;
     if this.is_empty() {
         this = vec![0u64; width];
@@ -240,7 +271,13 @@ pub fn seam(images: &mut [Image], width: usize, height: usize, opts: &SeamOption
         }
         let mut bw = backward[y].iter().copied();
         let mut seam_dt = || bw.next().unwrap_or(dt_max);
-        let prev_at = |prev: &[u64], x: i64| if x >= 0 && x < w { prev[x as usize] } else { dt_max };
+        let prev_at = |prev: &[u64], x: i64| {
+            if x >= 0 && x < w {
+                prev[x as usize]
+            } else {
+                dt_max
+            }
+        };
 
         let mut coverage: Vec<(u32, bool, bool)> = Vec::new();
         let mut x: i64 = 0;
@@ -277,7 +314,9 @@ pub fn seam(images: &mut [Image], width: usize, height: usize, opts: &SeamOption
                 result.alpha = true;
             }
             match coverage.last_mut() {
-                Some(last) if last.1 == (xor_count != 0) && last.2 == (xor_count == 1) => last.0 += min_count as u32,
+                Some(last) if last.1 == (xor_count != 0) && last.2 == (xor_count == 1) => {
+                    last.0 += min_count as u32
+                }
                 _ => coverage.push((min_count as u32, xor_count != 0, xor_count == 1)),
             }
 
@@ -300,7 +339,8 @@ pub fn seam(images: &mut [Image], width: usize, height: usize, opts: &SeamOption
                     m[y * width + x as usize..y * width + stop as usize].fill(xor_image as u8);
                 }
                 let img = &images[xor_image];
-                let base = (y as i64 - img.ypos as i64) as usize * img.width + (x - img.xpos as i64) as usize;
+                let base = (y as i64 - img.ypos as i64) as usize * img.width
+                    + (x - img.xpos as i64) as usize;
                 result.total_pixels += min_count as u64;
                 for c in 0..3 {
                     let range = base..base + min_count as usize;
@@ -328,7 +368,10 @@ pub fn seam(images: &mut [Image], width: usize, height: usize, opts: &SeamOption
                         while x < stop {
                             best = this[x as usize];
                             if x > 0 {
-                                let d = maskval(&st, this[(x - 1) as usize].wrapping_add(0x3_0000_0000));
+                                let d = maskval(
+                                    &st,
+                                    this[(x - 1) as usize].wrapping_add(0x3_0000_0000),
+                                );
                                 if d < best {
                                     best = d;
                                 }
@@ -445,13 +488,15 @@ pub fn seam(images: &mut [Image], width: usize, height: usize, opts: &SeamOption
     }
 
     if let (Some(name), Some(m)) = (opts.xor, xor_map.as_ref())
-        && io::png_write_palette(name, width, height, m).is_err() {
-            out!(0, "WARNING: Could not save XOR map\n");
-        }
+        && io::png_write_palette(name, width, height, m).is_err()
+    {
+        out!(0, "WARNING: Could not save XOR map\n");
+    }
     if let (Some(name), Some(m)) = (opts.seamsave, seam_map.as_ref())
-        && io::png_write_palette(name, width, height, m).is_err() {
-            out!(0, "WARNING: Could not save Seam map\n");
-        }
+        && io::png_write_palette(name, width, height, m).is_err()
+    {
+        out!(0, "WARNING: Could not save Seam map\n");
+    }
 
     if let Some(name) = opts.seamload {
         let (pw, ph, idx) = io::png_read_indices(name).unwrap_or_else(|e| die!("{e}"));
@@ -479,5 +524,9 @@ pub fn seam(images: &mut [Image], width: usize, height: usize, opts: &SeamOption
 }
 
 fn sum_samples<T: Copy + Into<u64>>(v: &[T], gamma: bool) -> u64 {
-    if gamma { v.iter().map(|&x| x.into() * x.into()).sum() } else { v.iter().map(|&x| x.into()).sum() }
+    if gamma {
+        v.iter().map(|&x| x.into() * x.into()).sum()
+    } else {
+        v.iter().map(|&x| x.into()).sum()
+    }
 }

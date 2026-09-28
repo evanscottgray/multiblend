@@ -12,7 +12,6 @@ pub enum Plane {
     U16(Vec<u16>),
 }
 
-
 pub struct Image {
     pub filename: String,
     pub kind: ImageType,
@@ -90,15 +89,41 @@ impl Image {
         if self.info.spp == 4 {
             match samples {
                 Samples::U8(s) => {
-                    let mut px: Vec<u32> = s.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-                    self.process_rgba(&mut px, fw, fh, |p| p >= 0xff00_0000, |p, c| (p >> (8 * c)) & 0xff, index);
+                    let mut px: Vec<u32> = s
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                        .collect();
+                    self.process_rgba(
+                        &mut px,
+                        fw,
+                        fh,
+                        |p| p >= 0xff00_0000,
+                        |p, c| (p >> (8 * c)) & 0xff,
+                        index,
+                    );
                 }
                 Samples::U16(s) => {
                     let mut px: Vec<u64> = s
-                        .as_chunks::<4>().0.iter()
-                        .map(|c| c[0] as u64 | (c[1] as u64) << 16 | (c[2] as u64) << 32 | (c[3] as u64) << 48)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| {
+                            c[0] as u64
+                                | (c[1] as u64) << 16
+                                | (c[2] as u64) << 32
+                                | (c[3] as u64) << 48
+                        })
                         .collect();
-                    self.process_rgba(&mut px, fw, fh, |p| p >= 0xffff_0000_0000_0000, |p, c| ((p >> (16 * c)) & 0xffff) as u32, index);
+                    self.process_rgba(
+                        &mut px,
+                        fw,
+                        fh,
+                        |p| p >= 0xffff_0000_0000_0000,
+                        |p, c| ((p >> (16 * c)) & 0xffff) as u32,
+                        index,
+                    );
                 }
             }
         } else {
@@ -112,18 +137,34 @@ impl Image {
             self.opacity = opacity;
             let n = fw * fh;
             self.channels = match samples {
-                Samples::U8(s) => (0..3).map(|c| Some(Plane::U8((0..n).map(|i| s[i * 3 + c]).collect()))).collect(),
-                Samples::U16(s) => (0..3).map(|c| Some(Plane::U16((0..n).map(|i| s[i * 3 + c]).collect()))).collect(),
+                Samples::U8(s) => (0..3)
+                    .map(|c| Some(Plane::U8((0..n).map(|i| s[i * 3 + c]).collect())))
+                    .collect(),
+                Samples::U16(s) => (0..3)
+                    .map(|c| Some(Plane::U16((0..n).map(|i| s[i * 3 + c]).collect())))
+                    .collect(),
             };
         }
 
         if dump_enabled() {
             for c in 0..3 {
                 match self.channels[c].as_ref().unwrap() {
-                    Plane::U8(v) => dump(&format!("img{index}_ch{c}"), v, self.width, self.height, "u8"),
+                    Plane::U8(v) => dump(
+                        &format!("img{index}_ch{c}"),
+                        v,
+                        self.width,
+                        self.height,
+                        "u8",
+                    ),
                     Plane::U16(v) => {
                         let b: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
-                        dump(&format!("img{index}_ch{c}"), &b, self.width, self.height, "u16")
+                        dump(
+                            &format!("img{index}_ch{c}"),
+                            &b,
+                            self.width,
+                            self.height,
+                            "u16",
+                        )
                     }
                 }
             }
@@ -131,7 +172,15 @@ impl Image {
         out!(1, "Processing {}...\n", self.filename);
     }
 
-    fn process_rgba<P: Copy>(&mut self, px: &mut [P], fw: usize, fh: usize, opaque: impl Fn(P) -> bool, chan: impl Fn(P, u32) -> u32, _index: usize) {
+    fn process_rgba<P: Copy>(
+        &mut self,
+        px: &mut [P],
+        fw: usize,
+        fh: usize,
+        opaque: impl Fn(P) -> bool,
+        chan: impl Fn(P, u32) -> u32,
+        _index: usize,
+    ) {
         // Trim to the bounding box of fully opaque pixels.
         let (mut top, mut bottom, mut left, mut right) = (usize::MAX, 0, usize::MAX, 0);
         for y in 0..fh {
@@ -160,9 +209,15 @@ impl Image {
         let plane = |c: u32| {
             let rows = (top..top + h).map(move |y| &px[y * fw + left..y * fw + left + w]);
             if is16 {
-                Plane::U16(rows.flat_map(|r| r.iter().map(|&p| chan(p, c) as u16)).collect())
+                Plane::U16(
+                    rows.flat_map(|r| r.iter().map(|&p| chan(p, c) as u16))
+                        .collect(),
+                )
             } else {
-                Plane::U8(rows.flat_map(|r| r.iter().map(|&p| chan(p, c) as u8)).collect())
+                Plane::U8(
+                    rows.flat_map(|r| r.iter().map(|&p| chan(p, c) as u8))
+                        .collect(),
+                )
             }
         };
         self.channels = (0..3).map(|c| Some(plane(c))).collect();
@@ -173,7 +228,14 @@ impl Image {
 /// forward pass then backward pass, exactly as `Image::Read` does. Operates on the
 /// `w`x`h` window of `px` starting at index `org` with row stride `stride`.
 /// Returns the opacity runs of the window.
-fn inpaint<P: Copy>(px: &mut [P], stride: usize, org: usize, w: usize, h: usize, opaque: &impl Fn(P) -> bool) -> RunMask {
+fn inpaint<P: Copy>(
+    px: &mut [P],
+    stride: usize,
+    org: usize,
+    w: usize,
+    h: usize,
+    opaque: &impl Fn(P) -> bool,
+) -> RunMask {
     let mut mask = RunMask::default();
     let mut fwd = vec![0u32; w * h];
 
@@ -198,7 +260,11 @@ fn inpaint<P: Copy>(px: &mut [P], stride: usize, org: usize, w: usize, h: usize,
                     }
                 } else if x == 0 {
                     b = prev[0].wrapping_add(3);
-                    c = if w > 1 { prev[1].wrapping_add(4) } else { u32::MAX };
+                    c = if w > 1 {
+                        prev[1].wrapping_add(4)
+                    } else {
+                        u32::MAX
+                    };
                     let copy = if b < c {
                         d = b;
                         row - stride
@@ -218,7 +284,11 @@ fn inpaint<P: Copy>(px: &mut [P], stride: usize, org: usize, w: usize, h: usize,
                         d = this[x - 1].wrapping_add(3);
                         first = false;
                     }
-                    c = if x < w - 1 { prev[x + 1].wrapping_add(4) } else { 0xffff_ffff };
+                    c = if x < w - 1 {
+                        prev[x + 1].wrapping_add(4)
+                    } else {
+                        0xffff_ffff
+                    };
                     let mut copy = row + x - 1;
                     if a < d {
                         d = a;
@@ -309,11 +379,19 @@ fn inpaint<P: Copy>(px: &mut [P], stride: usize, org: usize, w: usize, h: usize,
             } else {
                 let xu = x as usize;
                 let mut b = prev[xu].wrapping_add(3);
-                c = if xu < w - 1 { prev[xu + 1].wrapping_add(4) } else { 0x8000_0000 };
+                c = if xu < w - 1 {
+                    prev[xu + 1].wrapping_add(4)
+                } else {
+                    0x8000_0000
+                };
                 let mut m = count;
                 while m > 0 {
                     let xu = x as usize;
-                    let a = if xu > 0 { prev[xu - 1].wrapping_add(4) } else { 0x8000_0000 };
+                    let a = if xu > 0 {
+                        prev[xu - 1].wrapping_add(4)
+                    } else {
+                        0x8000_0000
+                    };
                     let mut best = fwd[y * w + xu];
                     let mut copy = None;
                     if a < best {

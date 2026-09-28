@@ -30,20 +30,38 @@ struct WrapPyramid {
     masks: Vec<MaskLevel>,
 }
 
-fn level_count(size: f32) -> i32 {
-    ((size + 4.0f32).log2() - 1.0).floor() as i32
+/// `floor(log2(size + 4) - 1)`, computed exactly with integers so it can't
+/// depend on the platform's libm. The reference evaluates it with f32 `log2`;
+/// the two agree for every size below 2^21 (see the unit test). Above that, f32
+/// rounds `log2(2^k - 1)` up to k, so the reference can add one level for a
+/// few sizes just below a power of two.
+fn level_count(size: usize) -> i32 {
+    let m = size as u64 + 4;
+    (63 - m.leading_zeros()) as i32 - 1
 }
 
 fn dump_level(name: &str, py: &Pyramid, l: usize) {
     if dump_enabled() {
         let lev = &py.levels[l];
-        dump(name, &f32_bytes(&py.data[l][..lev.pitch * lev.height]), lev.pitch, lev.height, "f32");
+        dump(
+            name,
+            &f32_bytes(&py.data[l][..lev.pitch * lev.height]),
+            lev.pitch,
+            lev.height,
+            "f32",
+        );
     }
 }
 
 #[allow(clippy::needless_range_loop)]
 /// Composite pyramid `input` into `output` for levels [0, n) with `masks`.
-fn composite(output: &mut Pyramid, input: &Pyramid, masks: &[MaskLevel], n: usize, first_at: impl Fn(usize) -> bool + Sync) {
+fn composite(
+    output: &mut Pyramid,
+    input: &Pyramid,
+    masks: &[MaskLevel],
+    n: usize,
+    first_at: impl Fn(usize) -> bool + Sync,
+) {
     for l in 0..n {
         let il = &input.levels[l];
         let ol = output.levels[l].clone();
@@ -52,11 +70,22 @@ fn composite(output: &mut Pyramid, input: &Pyramid, masks: &[MaskLevel], n: usiz
         let in_data = &input.data[l];
         let mask = &masks[l];
         let first = first_at(l);
-        output.data[l][..ol.pitch * ol.height].par_chunks_mut(ol.pitch).enumerate().for_each(|(y, out_row)| {
-            let in_line = (y as i64 - y_offset).clamp(0, il.height as i64 - 1) as usize;
-            let in_row = &in_data[in_line * il.pitch..(in_line + 1) * il.pitch];
-            composite_line(in_row, out_row, first, x_offset, il.width as i64, ol.width as i64, mask.row(y));
-        });
+        output.data[l][..ol.pitch * ol.height]
+            .par_chunks_mut(ol.pitch)
+            .enumerate()
+            .for_each(|(y, out_row)| {
+                let in_line = (y as i64 - y_offset).clamp(0, il.height as i64 - 1) as usize;
+                let in_row = &in_data[in_line * il.pitch..(in_line + 1) * il.pitch];
+                composite_line(
+                    in_row,
+                    out_row,
+                    first,
+                    x_offset,
+                    il.width as i64,
+                    ol.width as i64,
+                    mask.row(y),
+                );
+            });
     }
 }
 
@@ -76,20 +105,34 @@ fn main() {
             if t == ImageType::Jpeg && output_bpp == 16 {
                 die!("Error: 16bpp output is incompatible with JPEG output");
             }
-            Some(File::create(opts.output.as_ref().unwrap()).unwrap_or_else(|_| die!("Error: Could not open output file")))
+            Some(
+                File::create(opts.output.as_ref().unwrap())
+                    .unwrap_or_else(|_| die!("Error: Could not open output file")),
+            )
         }
     };
 
     let mut timer = Timer::start();
 
     // Open images for preliminary info.
-    let mut images: Vec<Image> = opts.inputs.iter().map(|i| Image::open(&i.filename, i.xpos_add, i.ypos_add)).collect();
+    let mut images: Vec<Image> = opts
+        .inputs
+        .iter()
+        .map(|i| Image::open(&i.filename, i.xpos_add, i.ypos_add))
+        .collect();
     let n_images = images.len();
 
     for img in &images[1..] {
         let (a, b) = (&images[0].info, &img.info);
         if a.xres != b.xres || a.yres != b.yres {
-            out!(0, "Warning: TIFF resolution mismatch ({:.6} {:.6}/{:.6} {:.6})\n", a.xres, a.yres, b.xres, b.yres);
+            out!(
+                0,
+                "Warning: TIFF resolution mismatch ({:.6} {:.6}/{:.6} {:.6})\n",
+                a.xres,
+                a.yres,
+                b.xres,
+                b.yres
+            );
         }
     }
     for img in &images {
@@ -112,7 +155,10 @@ fn main() {
         let mut indexed: Vec<(usize, &mut Image)> = images.iter_mut().enumerate().collect();
         while !indexed.is_empty() {
             let (mut n, mut cost) = (0, 0);
-            while n < indexed.len() && n < rayon::current_num_threads() && (n == 0 || cost + indexed[n].1.read_cost() <= READ_BUDGET) {
+            while n < indexed.len()
+                && n < rayon::current_num_threads()
+                && (n == 0 || cost + indexed[n].1.read_cost() <= READ_BUDGET)
+            {
                 cost += indexed[n].1.read_cost();
                 n += 1;
             }
@@ -143,12 +189,18 @@ fn main() {
             ws.sort_unstable();
             hs.sort_unstable();
             let half = (ws.len() - 1) >> 1;
-            let med = |v: &[usize]| if v.len() & 1 == 1 { v[half] } else { (v[half] + v[half + 1] + 1) >> 1 };
+            let med = |v: &[usize]| {
+                if v.len() & 1 == 1 {
+                    v[half]
+                } else {
+                    (v[half] + v[half + 1] + 1) >> 1
+                }
+            };
             med(&ws).max(med(&hs))
         } else {
             width.max(height)
         };
-        level_count(blend_wh as f32) + opts.wideblend as i32
+        level_count(blend_wh) + opts.wideblend as i32
     } else {
         opts.fixed_levels
     };
@@ -159,7 +211,10 @@ fn main() {
         out!(1, "\n{width} x {height}, {output_bpp} bpp\n\n");
     } else {
         blend_levels = blend_levels.clamp(1, MAX_LEVELS);
-        out!(1, "\n{width} x {height}, {blend_levels} levels, {output_bpp} bpp\n\n");
+        out!(
+            1,
+            "\n{width} x {height}, {blend_levels} levels, {output_bpp} bpp\n\n"
+        );
     }
     let blend_levels = blend_levels as usize;
 
@@ -188,25 +243,45 @@ fn main() {
     let no_mask = opts.no_mask || !seams.alpha || opts.output_type == ImageType::Jpeg;
     let seam_time = timer.read();
 
-    let (mut shrink_mask_time, mut copy_time, mut shrink_time, mut laplace_time) = (0.0, 0.0, 0.0, 0.0);
-    let (mut blend_time, mut collapse_time, mut wrap_time, mut out_time, mut write_time) = (0.0, 0.0, 0.0, 0.0, 0.0);
+    let (mut shrink_mask_time, mut copy_time, mut shrink_time, mut laplace_time) =
+        (0.0, 0.0, 0.0, 0.0);
+    let (mut blend_time, mut collapse_time, mut wrap_time, mut out_time, mut write_time) =
+        (0.0, 0.0, 0.0, 0.0, 0.0);
 
     if let Some(output_file) = output_file {
         out!(1, "Shrinking masks...\n");
         timer.restart();
-        images.par_iter_mut().for_each(|img| shrink_masks(&mut img.masks, blend_levels));
+        images
+            .par_iter_mut()
+            .for_each(|img| shrink_masks(&mut img.masks, blend_levels));
         shrink_mask_time = timer.read();
         if dump_enabled() {
             for (i, img) in images.iter().enumerate() {
                 for (l, m) in img.masks.iter().enumerate() {
-                    dump(&format!("mask{i}_l{l}"), &f32_bytes(&m.dense()), m.width, m.height, "f32");
+                    dump(
+                        &format!("mask{i}_l{l}"),
+                        &f32_bytes(&m.dense()),
+                        m.width,
+                        m.height,
+                        "f32",
+                    );
                 }
             }
         }
 
         // Wrapping pyramids and their masks
-        let wrap_levels_h = if opts.wrap & 1 != 0 { level_count((width >> 1) as f32) } else { 0 }.clamp(0, MAX_LEVELS) as usize;
-        let wrap_levels_v = if opts.wrap & 2 != 0 { level_count((height >> 1) as f32) } else { 0 }.clamp(0, MAX_LEVELS) as usize;
+        let wrap_levels_h = if opts.wrap & 1 != 0 {
+            level_count(width >> 1)
+        } else {
+            0
+        }
+        .clamp(0, MAX_LEVELS) as usize;
+        let wrap_levels_v = if opts.wrap & 2 != 0 {
+            level_count(height >> 1)
+        } else {
+            0
+        }
+        .clamp(0, MAX_LEVELS) as usize;
         let mut wrap_pyramids: Vec<WrapPyramid> = Vec::new();
         let mut add_wrap = |w: usize, h: usize, levels: usize, x: usize, y: usize| {
             let mut m = MaskLevel::new(width, height);
@@ -226,7 +301,10 @@ fn main() {
                     m.next_row();
                 }
             }
-            wrap_pyramids.push(WrapPyramid { py: Pyramid::new(w, h, levels, x as i32, y as i32), masks: vec![m] });
+            wrap_pyramids.push(WrapPyramid {
+                py: Pyramid::new(w, h, levels, x as i32, y as i32),
+                masks: vec![m],
+            });
         };
         if opts.wrap & 1 != 0 {
             add_wrap(width >> 1, height, wrap_levels_h, 0, 0);
@@ -257,7 +335,11 @@ fn main() {
         );
 
         let depth_mul: f32 = if opts.gamma {
-            if output_bpp == 8 { 1.0f32 / 66049.0 } else { 66049.0 }
+            if output_bpp == 8 {
+                1.0f32 / 66049.0
+            } else {
+                66049.0
+            }
         } else if output_bpp == 8 {
             1.0f32 / 257.0
         } else {
@@ -271,7 +353,14 @@ fn main() {
                 for i in 0..n_images {
                     timer.restart();
                     let img = &mut images[i];
-                    let mut py = Pyramid::with_buffers(img.width, img.height, blend_levels, img.xpos, img.ypos, std::mem::take(&mut pool));
+                    let mut py = Pyramid::with_buffers(
+                        img.width,
+                        img.height,
+                        blend_levels,
+                        img.xpos,
+                        img.ypos,
+                        std::mem::take(&mut pool),
+                    );
                     match img.channels[c].take().unwrap() {
                         Plane::U8(v) => py.copy_from(&v, img.width, opts.gamma),
                         Plane::U16(v) => py.copy_from(&v, img.width, opts.gamma),
@@ -332,16 +421,23 @@ fn main() {
                     } else {
                         swap_v(&mut output, false);
                     }
-                    let levels = if dir == 1 { wrap_levels_h } else { wrap_levels_v };
+                    let levels = if dir == 1 {
+                        wrap_levels_h
+                    } else {
+                        wrap_levels_v
+                    };
                     for wp in 0..2 {
                         let wpy = &mut wrap_pyramids[p];
                         let (x0, y0) = (wpy.py.levels[0].x as usize, wpy.py.levels[0].y as usize);
                         let opitch = output.levels[0].pitch;
-                        wpy.py.copy_from_f32(&output.data[0][x0 + y0 * opitch..], opitch);
+                        wpy.py
+                            .copy_from_f32(&output.data[0][x0 + y0 * opitch..], opitch);
                         wpy.py.shrink();
                         wpy.py.laplace();
                         let wpy = &wrap_pyramids[p];
-                        composite(&mut output, &wpy.py, &wpy.masks, levels, |l| wp == 0 && l != 0);
+                        composite(&mut output, &wpy.py, &wpy.masks, levels, |l| {
+                            wp == 0 && l != 0
+                        });
                         p += 1;
                     }
                     output.collapse(levels);
@@ -413,8 +509,26 @@ fn main() {
         let bytes = output_bpp as usize / 8;
         let big_endian = opts.output_type == ImageType::Png;
         let row_bytes = width * spp * bytes;
-        let planes8: Vec<&[u8]> = out_planes.iter().filter_map(|p| if let Plane::U8(v) = p { Some(&v[..]) } else { None }).collect();
-        let planes16: Vec<&[u16]> = out_planes.iter().filter_map(|p| if let Plane::U16(v) = p { Some(&v[..]) } else { None }).collect();
+        let planes8: Vec<&[u8]> = out_planes
+            .iter()
+            .filter_map(|p| {
+                if let Plane::U8(v) = p {
+                    Some(&v[..])
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let planes16: Vec<&[u16]> = out_planes
+            .iter()
+            .filter_map(|p| {
+                if let Plane::U16(v) = p {
+                    Some(&v[..])
+                } else {
+                    None
+                }
+            })
+            .collect();
         let fill_row = |y: usize, row: &mut [u8]| {
             let base = y * width;
             let mut x = 0usize;
@@ -424,7 +538,11 @@ fn main() {
                 if !covered {
                     dst.fill(0);
                 } else if bytes == 1 {
-                    let (r, g, b) = (&planes8[0][base + x..], &planes8[1][base + x..], &planes8[2][base + x..]);
+                    let (r, g, b) = (
+                        &planes8[0][base + x..],
+                        &planes8[1][base + x..],
+                        &planes8[2][base + x..],
+                    );
                     for (i, px) in dst.chunks_exact_mut(spp).enumerate() {
                         px[0] = r[i];
                         px[1] = g[i];
@@ -434,8 +552,18 @@ fn main() {
                         }
                     }
                 } else {
-                    let (r, g, b) = (&planes16[0][base + x..], &planes16[1][base + x..], &planes16[2][base + x..]);
-                    let enc = |v: u16| if big_endian { v.to_be_bytes() } else { v.to_le_bytes() };
+                    let (r, g, b) = (
+                        &planes16[0][base + x..],
+                        &planes16[1][base + x..],
+                        &planes16[2][base + x..],
+                    );
+                    let enc = |v: u16| {
+                        if big_endian {
+                            v.to_be_bytes()
+                        } else {
+                            v.to_le_bytes()
+                        }
+                    };
                     for (i, px) in dst.chunks_exact_mut(px_bytes).enumerate() {
                         px[0..2].copy_from_slice(&enc(r[i]));
                         px[2..4].copy_from_slice(&enc(g[i]));
@@ -455,7 +583,10 @@ fn main() {
                 let xres = (img0.xres != -1.0).then_some(img0.xres);
                 let yres = (img0.yres != -1.0).then_some(img0.yres);
                 if (xres.is_some() && min_xpos < 0) || (yres.is_some() && min_ypos < 0) {
-                    out!(0, "Warning: output has a negative position; TIFF position clamped to 0\n");
+                    out!(
+                        0,
+                        "Warning: output has a negative position; TIFF position clamped to 0\n"
+                    );
                 }
                 let meta = io::TiffMeta {
                     xres,
@@ -464,7 +595,17 @@ fn main() {
                     ypos: yres.map(|r| min_ypos.max(0) as f32 / r),
                 };
                 let compression = opts.compression.unwrap_or(TiffCompression::Lzw);
-                io::TiffWriter::new(output_file, opts.big_tiff, width, height, spp, output_bpp as usize, compression, meta).and_then(|mut w| {
+                io::TiffWriter::new(
+                    output_file,
+                    opts.big_tiff,
+                    width,
+                    height,
+                    spp,
+                    output_bpp as usize,
+                    compression,
+                    meta,
+                )
+                .and_then(|mut w| {
                     // Fill and compress a batch of strips in parallel, then write them in order.
                     let strips: Vec<usize> = (0..height).step_by(io::ROWS_PER_STRIP).collect();
                     let batch = rayon::current_num_threads() * 2;
@@ -489,9 +630,19 @@ fn main() {
             }
             _ => {
                 let mut buf = vec![0u8; height * row_bytes];
-                buf.par_chunks_mut(row_bytes).enumerate().for_each(|(y, row)| fill_row(y, row));
+                buf.par_chunks_mut(row_bytes)
+                    .enumerate()
+                    .for_each(|(y, row)| fill_row(y, row));
                 if opts.output_type == ImageType::Png {
-                    io::png_write(output_file, width, height, spp, output_bpp as usize, opts.jpeg_quality, &buf)
+                    io::png_write(
+                        output_file,
+                        width,
+                        height,
+                        spp,
+                        output_bpp as usize,
+                        opts.jpeg_quality,
+                        &buf,
+                    )
                 } else {
                     io::jpeg_write(output_file, width, height, opts.jpeg_quality, &buf)
                 }
@@ -520,7 +671,27 @@ fn main() {
             println!("Output:   {out_time:.3}s");
             println!("Write:    {write_time:.3}s");
         }
-        let what = if opts.output_type == ImageType::None { "Execution" } else { "Blend" };
-        println!("\n{what} complete. Total execution time: {:.3}s", timer_all.read());
+        let what = if opts.output_type == ImageType::None {
+            "Execution"
+        } else {
+            "Blend"
+        };
+        println!(
+            "\n{what} complete. Total execution time: {:.3}s",
+            timer_all.read()
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::level_count;
+
+    #[test]
+    fn level_count_matches_reference_formula() {
+        for n in 0..(1usize << 20) {
+            let reference = ((n as f32 + 4.0f32).log2() - 1.0).floor() as i32;
+            assert_eq!(level_count(n), reference, "size {n}");
+        }
     }
 }

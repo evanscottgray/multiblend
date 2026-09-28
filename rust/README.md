@@ -25,6 +25,17 @@ cargo test       # a few unit tests for helpers the black-box suite only reaches
   `READ_BUDGET` (1 GiB of transient buffers, in `main.rs`). The workload above peaks at about
   1.8 GB, against 1.3 GB for the C++ build and for fully sequential reading.
 
+## Distribution
+
+The binary is self-contained: the TIFF, PNG and JPEG code is compiled in.
+
+- **macOS:** it links only `libSystem`.
+- **Linux:** CI builds fully static glibc binaries (`+crt-static`, Linux 3.2+) that run on any
+  distro, including Alpine and BusyBox. musl was measured at 65% slower (see `CI_PLAN.md`).
+- **Windows:** the `.exe` links the C runtime statically (`.cargo/config.toml`).
+
+Releases are built by `.github/workflows/rust.yml` on `v*` tags.
+
 ## Layout
 
 | File | Contents | C++ origin |

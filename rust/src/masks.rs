@@ -56,7 +56,12 @@ pub struct MaskLevel {
 
 impl MaskLevel {
     pub fn new(width: usize, height: usize) -> Self {
-        MaskLevel { width, height, words: Vec::new(), rows: vec![0] }
+        MaskLevel {
+            width,
+            height,
+            words: Vec::new(),
+            rows: vec![0],
+        }
     }
     pub fn next_row(&mut self) {
         self.rows.push(self.words.len());
@@ -74,14 +79,16 @@ impl MaskLevel {
             cur = match cur {
                 Some((cv, n)) if cv == v => Some((cv, n + len)),
                 Some((cv, n)) => {
-                    self.words.push(if cv { 0xc000_0000 } else { 0x8000_0000 } | n);
+                    self.words
+                        .push(if cv { 0xc000_0000 } else { 0x8000_0000 } | n);
                     Some((v, len))
                 }
                 None => Some((v, len)),
             };
         }
         if let Some((cv, n)) = cur {
-            self.words.push(if cv { 0xc000_0000 } else { 0x8000_0000 } | n);
+            self.words
+                .push(if cv { 0xc000_0000 } else { 0x8000_0000 } | n);
         }
     }
 
@@ -186,7 +193,11 @@ fn squish(inp: &[u32], out: &mut Vec<u32>, in_width: i32, out_width: i32) {
     let mut e_read;
     let (mut d, mut e);
 
-    let next = |in_p: &mut usize, in_count: &mut i32, read: &mut i32, current_val: &mut f32, last_int: &mut i32| {
+    let next = |in_p: &mut usize,
+                in_count: &mut i32,
+                read: &mut i32,
+                current_val: &mut f32,
+                last_int: &mut i32| {
         let (cnt, v, li) = item(inp, in_p);
         *in_count = cnt;
         *read += cnt;
@@ -196,7 +207,13 @@ fn squish(inp: &[u32], out: &mut Vec<u32>, in_width: i32, out_width: i32) {
 
     while wrote < out_width {
         if in_count == 0 && read < in_width {
-            next(&mut in_p, &mut in_count, &mut read, &mut current_val, &mut last_int);
+            next(
+                &mut in_p,
+                &mut in_count,
+                &mut read,
+                &mut current_val,
+                &mut last_int,
+            );
         }
         if read == in_width {
             in_count = 0x7fff_ffff;
@@ -208,7 +225,13 @@ fn squish(inp: &[u32], out: &mut Vec<u32>, in_width: i32, out_width: i32) {
             in_count -= 2;
         } else {
             d = current_val;
-            next(&mut in_p, &mut in_count, &mut read, &mut current_val, &mut last_int);
+            next(
+                &mut in_p,
+                &mut in_count,
+                &mut read,
+                &mut current_val,
+                &mut last_int,
+            );
             e = current_val;
             e_read = in_p;
             in_count -= 1;
@@ -300,12 +323,15 @@ pub fn shrink_masks(masks: &mut Vec<MaskLevel>, n_levels: usize) {
                         min_count = count[i];
                     }
                 }
-                let val = (vals[0] + vals[4]) * 0.0625f32 + (vals[1] + vals[3]) * 0.25f32 + vals[2] * 0.375f32;
+                let val = (vals[0] + vals[4]) * 0.0625f32
+                    + (vals[1] + vals[3]) * 0.25f32
+                    + vals[2] * 0.375f32;
                 if val == 0.0 || val == 1.0 {
                     if min_count == 1 {
                         outm.words.push(val.to_bits());
                     } else {
-                        outm.words.push(0x8000_0000 | ((val as u32) << 30) | min_count as u32);
+                        outm.words
+                            .push(0x8000_0000 | ((val as u32) << 30) | min_count as u32);
                     }
                 } else {
                     if min_count > 1 {

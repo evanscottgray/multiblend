@@ -26,7 +26,13 @@ pub struct Pyramid {
 }
 
 impl Pyramid {
-    pub fn geometry(mut width: usize, mut height: usize, n_levels: usize, mut x: i32, mut y: i32) -> Vec<Level> {
+    pub fn geometry(
+        mut width: usize,
+        mut height: usize,
+        n_levels: usize,
+        mut x: i32,
+        mut y: i32,
+    ) -> Vec<Level> {
         let mut levels: Vec<Level> = Vec::with_capacity(n_levels);
         let mut b: i32 = 0;
         let mut req: i32 = 2;
@@ -35,7 +41,16 @@ impl Pyramid {
             let y_shift = (y.wrapping_sub(b) & (req - 1)) != 0;
             let pitch = (width + x_shift as usize + 7) & !7;
             let rows = (height + y_shift as usize + 3) & !3;
-            levels.push(Level { width, height, pitch, rows, x, y, x_shift, y_shift });
+            levels.push(Level {
+                width,
+                height,
+                pitch,
+                rows,
+                x,
+                y,
+                x_shift,
+                y_shift,
+            });
             x = x.wrapping_sub((x_shift as i32) << n).wrapping_sub(req);
             y = y.wrapping_sub((y_shift as i32) << n).wrapping_sub(req);
             b -= req;
@@ -53,7 +68,14 @@ impl Pyramid {
     /// Build a pyramid reusing previously allocated level buffers (see `into_buffers`).
     /// Buffer contents are stale until filled; every row a level uses is written
     /// before it is read, and rows past a level's height are cleared.
-    pub fn with_buffers(width: usize, height: usize, n_levels: usize, x: i32, y: i32, mut pool: Vec<Vec<f32>>) -> Pyramid {
+    pub fn with_buffers(
+        width: usize,
+        height: usize,
+        n_levels: usize,
+        x: i32,
+        y: i32,
+        mut pool: Vec<Vec<f32>>,
+    ) -> Pyramid {
         let levels = Self::geometry(width, height, n_levels, x, y);
         pool.resize_with(levels.len().max(pool.len()), Vec::new);
         let mut data: Vec<Vec<f32>> = pool.drain(..levels.len()).collect();
@@ -74,29 +96,40 @@ impl Pyramid {
 
     /// Fill level 0 from planar integer samples (row stride `src_pitch`).
     /// Columns beyond the width repeat the last sample.
-    pub fn copy_from<T: Copy + Into<u32> + Sync>(&mut self, src: &[T], src_pitch: usize, gamma: bool) {
+    pub fn copy_from<T: Copy + Into<u32> + Sync>(
+        &mut self,
+        src: &[T],
+        src_pitch: usize,
+        gamma: bool,
+    ) {
         let l = &self.levels[0];
         let (w, pitch) = (l.width, l.pitch);
-        self.data[0][..pitch * l.height].par_chunks_mut(pitch).enumerate().for_each(|(y, row)| {
-            let s = &src[y * src_pitch..y * src_pitch + w];
-            for x in 0..w {
-                let f = s[x].into() as f32;
-                row[x] = if gamma { f * f } else { f };
-            }
-            let last = row[w - 1];
-            row[w..].fill(last);
-        });
+        self.data[0][..pitch * l.height]
+            .par_chunks_mut(pitch)
+            .enumerate()
+            .for_each(|(y, row)| {
+                let s = &src[y * src_pitch..y * src_pitch + w];
+                for x in 0..w {
+                    let f = s[x].into() as f32;
+                    row[x] = if gamma { f * f } else { f };
+                }
+                let last = row[w - 1];
+                row[w..].fill(last);
+            });
     }
 
     /// Fill level 0 from floats (wrapping), gamma off.
     pub fn copy_from_f32(&mut self, src: &[f32], src_pitch: usize) {
         let l = &self.levels[0];
         let (w, pitch) = (l.width, l.pitch);
-        self.data[0][..pitch * l.height].par_chunks_mut(pitch).enumerate().for_each(|(y, row)| {
-            row[..w].copy_from_slice(&src[y * src_pitch..y * src_pitch + w]);
-            let last = row[w - 1];
-            row[w..].fill(last);
-        });
+        self.data[0][..pitch * l.height]
+            .par_chunks_mut(pitch)
+            .enumerate()
+            .for_each(|(y, row)| {
+                row[..w].copy_from_slice(&src[y * src_pitch..y * src_pitch + w]);
+                let last = row[w - 1];
+                row[w..].fill(last);
+            });
     }
 
     pub fn multiply(&mut self, level: usize, mul: f32) {
@@ -109,7 +142,8 @@ impl Pyramid {
             d.fill(0.0);
             return;
         }
-        d.par_chunks_mut(l.pitch).for_each(|row| row.iter_mut().for_each(|v| *v *= mul));
+        d.par_chunks_mut(l.pitch)
+            .for_each(|row| row.iter_mut().for_each(|v| *v *= mul));
     }
 
     /// Add a constant to levels below `n` (the reference only ever adds to level 0,
@@ -118,7 +152,9 @@ impl Pyramid {
         let lim = n.min(self.levels.len() - 1);
         for l in 0..lim {
             let lev = &self.levels[l];
-            self.data[l][..lev.pitch * lev.height].par_chunks_mut(lev.pitch).for_each(|row| row.iter_mut().for_each(|v| *v += add));
+            self.data[l][..lev.pitch * lev.height]
+                .par_chunks_mut(lev.pitch)
+                .for_each(|row| row.iter_mut().for_each(|v| *v += add));
         }
     }
 
@@ -129,13 +165,16 @@ impl Pyramid {
             let hl = &self.levels[l];
             let ll = &self.levels[l + 1];
             let lo_pitch = ll.pitch;
-            lo_data[0][..lo_pitch * ll.height].par_chunks_mut(lo_pitch).enumerate().for_each_init(
-                || (vec![0f32; hl.pitch], Vec::new(), Vec::new()),
-                |(line, ev, od), (y, lo)| {
-                    let mul = vertical_line(hi, hl, ll.height, y, line);
-                    squeeze(line, lo, mul, hl.x_shift, ev, od);
-                },
-            );
+            lo_data[0][..lo_pitch * ll.height]
+                .par_chunks_mut(lo_pitch)
+                .enumerate()
+                .for_each_init(
+                    || (vec![0f32; hl.pitch], Vec::new(), Vec::new()),
+                    |(line, ev, od), (y, lo)| {
+                        let mul = vertical_line(hi, hl, ll.height, y, line);
+                        squeeze(line, lo, mul, hl.x_shift, ev, od);
+                    },
+                );
         }
     }
 
@@ -156,40 +195,48 @@ impl Pyramid {
             // needs once, into a reused per-thread buffer: upper row y reads expanded
             // lower rows (y + ys) / 2 ..= (y + ys) / 2 + 2.
             const BAND: usize = 32;
-            up[..pitch * ul.height].par_chunks_mut(pitch * BAND).enumerate().for_each_init(
-                || (Vec::new(), Vec::new()),
-                |(expanded, padded), (b, band)| {
-                    let y0 = b * BAND;
-                    let rows = band.len() / pitch;
-                    let k0 = (y0 + ys) / 2;
-                    let k1 = ((y0 + rows - 1 + ys) / 2 + 2).min(ll.rows - 1);
-                    expanded.resize((k1 + 1 - k0) * pitch, 0.0);
-                    for k in k0..=k1 {
-                        let row = &mut expanded[(k - k0) * pitch..(k - k0 + 1) * pitch];
-                        expand(&lo[k * ll.pitch..(k + 1) * ll.pitch], row, ul.x_shift, padded);
-                    }
-                    let ex = |k: usize| {
-                        let k = k.min(k1) - k0;
-                        &expanded[k * pitch..(k + 1) * pitch]
-                    };
-                    for (r, hi) in band.chunks_mut(pitch).enumerate() {
-                        let s = y0 + r + ys;
-                        if s & 1 == 0 {
-                            let k = s / 2 + 1;
-                            let (t1, t2, t3) = (ex(k - 1), ex(k), ex(k + 1));
-                            for x in 0..pitch {
-                                hi[x] = ((t1[x] + t3[x]) * 0.125f32 + t2[x] * 0.75f32) - hi[x];
-                            }
-                        } else {
-                            let k = s.div_ceil(2);
-                            let (t1, t2) = (ex(k), ex(k + 1));
-                            for x in 0..pitch {
-                                hi[x] = (t1[x] + t2[x]) * 0.5f32 - hi[x];
+            up[..pitch * ul.height]
+                .par_chunks_mut(pitch * BAND)
+                .enumerate()
+                .for_each_init(
+                    || (Vec::new(), Vec::new()),
+                    |(expanded, padded), (b, band)| {
+                        let y0 = b * BAND;
+                        let rows = band.len() / pitch;
+                        let k0 = (y0 + ys) / 2;
+                        let k1 = ((y0 + rows - 1 + ys) / 2 + 2).min(ll.rows - 1);
+                        expanded.resize((k1 + 1 - k0) * pitch, 0.0);
+                        for k in k0..=k1 {
+                            let row = &mut expanded[(k - k0) * pitch..(k - k0 + 1) * pitch];
+                            expand(
+                                &lo[k * ll.pitch..(k + 1) * ll.pitch],
+                                row,
+                                ul.x_shift,
+                                padded,
+                            );
+                        }
+                        let ex = |k: usize| {
+                            let k = k.min(k1) - k0;
+                            &expanded[k * pitch..(k + 1) * pitch]
+                        };
+                        for (r, hi) in band.chunks_mut(pitch).enumerate() {
+                            let s = y0 + r + ys;
+                            if s & 1 == 0 {
+                                let k = s / 2 + 1;
+                                let (t1, t2, t3) = (ex(k - 1), ex(k), ex(k + 1));
+                                for x in 0..pitch {
+                                    hi[x] = ((t1[x] + t3[x]) * 0.125f32 + t2[x] * 0.75f32) - hi[x];
+                                }
+                            } else {
+                                let k = s.div_ceil(2);
+                                let (t1, t2) = (ex(k), ex(k + 1));
+                                for x in 0..pitch {
+                                    hi[x] = (t1[x] + t2[x]) * 0.5f32 - hi[x];
+                                }
                             }
                         }
-                    }
-                },
-            );
+                    },
+                );
         }
     }
 
@@ -203,7 +250,14 @@ impl Pyramid {
 
     /// Level 0 to integer samples: clamp, optional sqrt (gamma) and ordered
     /// dither, then round half to even (`cvtps_epi32`).
-    pub fn out<T: Copy + Send>(&self, dst: &mut [T], gamma: bool, dither: bool, max: f32, conv: impl Fn(i32) -> T + Sync) {
+    pub fn out<T: Copy + Send>(
+        &self,
+        dst: &mut [T],
+        gamma: bool,
+        dither: bool,
+        max: f32,
+        conv: impl Fn(i32) -> T + Sync,
+    ) {
         const DITHER: [[f32; 4]; 4] = [
             [-0.125, 0.375, 0.0, 0.4999],
             [0.125, -0.375, 0.25, -0.25],
@@ -255,7 +309,11 @@ fn round_small(v: f32) -> f32 {
 #[cfg(test)]
 fn cvtps(v: f32) -> i32 {
     let r = v.round_ties_even();
-    if (-2147483648.0..2147483648.0).contains(&r) { r as i32 } else { i32::MIN }
+    if (-2147483648.0..2147483648.0).contains(&r) {
+        r as i32
+    } else {
+        i32::MIN
+    }
 }
 
 /// Vertical 5-tap filter for low-level row `y` into `line` (ShrinkThread).
@@ -339,7 +397,14 @@ fn vertical_line(hi: &[f32], hl: &Level, lo_height: usize, y: usize, line: &mut 
 /// Output k is centred on input 2k-2 with edge clamping. Writing the clamped
 /// line as P (P[i + 4] = line[clamp(i)]) and splitting it into even/odd halves
 /// E, O makes the taps contiguous: out[k] uses E[k], O[k], E[k+1], O[k+1], E[k+2].
-fn squeeze(line: &mut [f32], lo: &mut [f32], mul: f32, x_shift: bool, ev: &mut Vec<f32>, od: &mut Vec<f32>) {
+fn squeeze(
+    line: &mut [f32],
+    lo: &mut [f32],
+    mul: f32,
+    x_shift: bool,
+    ev: &mut Vec<f32>,
+    od: &mut Vec<f32>,
+) {
     let n = line.len();
     if x_shift {
         line.copy_within(0..n - 1, 1);
@@ -403,7 +468,15 @@ fn expand(lo: &[f32], hi: &mut [f32], shifted: bool, padded: &mut Vec<f32>) {
 /// Composite one input row into an output row using a mask row (`CompositeLine`).
 /// Image 0 assigns, later images accumulate; mask value 1 always assigns.
 #[allow(clippy::too_many_arguments)]
-pub fn composite_line(input: &[f32], output: &mut [f32], first: bool, x_offset: i64, in_w: i64, out_w: i64, mask: &[u32]) {
+pub fn composite_line(
+    input: &[f32],
+    output: &mut [f32],
+    first: bool,
+    x_offset: i64,
+    in_w: i64,
+    out_w: i64,
+    mask: &[u32],
+) {
     let mut x: i64 = 0;
     let mut p = 0usize;
     while x < out_w {
@@ -490,13 +563,15 @@ pub fn swap_h(py: &mut Pyramid, unswap: bool) {
     let l = &py.levels[0];
     let (w, pitch) = (l.width, l.pitch);
     let major = w.div_ceil(2);
-    py.data[0][..pitch * l.height].par_chunks_mut(pitch).for_each(|row| {
-        if unswap {
-            row[..w].rotate_right(major);
-        } else {
-            row[..w].rotate_left(major);
-        }
-    });
+    py.data[0][..pitch * l.height]
+        .par_chunks_mut(pitch)
+        .for_each(|row| {
+            if unswap {
+                row[..w].rotate_right(major);
+            } else {
+                row[..w].rotate_left(major);
+            }
+        });
 }
 
 /// Rotate level 0 rows up by floor(h/2) (or back).
@@ -517,7 +592,10 @@ mod tests {
 
     #[test]
     fn cvtps_rounds_half_to_even() {
-        assert_eq!([0.5f32, 1.5, 2.5, -0.5, 254.5, 255.4999].map(cvtps), [0, 2, 2, 0, 254, 255]);
+        assert_eq!(
+            [0.5f32, 1.5, 2.5, -0.5, 254.5, 255.4999].map(cvtps),
+            [0, 2, 2, 0, 254, 255]
+        );
         assert_eq!(cvtps(f32::NAN), i32::MIN);
     }
 
@@ -544,7 +622,9 @@ mod tests {
     #[test]
     fn laplace_then_collapse_is_identity_for_smooth_data() {
         let mut py = Pyramid::new(37, 23, 4, 3, 5);
-        let src: Vec<u16> = (0..37 * 23).map(|i| (i % 37 * 7 + i / 37 * 3) as u16).collect();
+        let src: Vec<u16> = (0..37 * 23)
+            .map(|i| (i % 37 * 7 + i / 37 * 3) as u16)
+            .collect();
         py.copy_from(&src, 37, false);
         let before = py.data[0].clone();
         py.shrink();

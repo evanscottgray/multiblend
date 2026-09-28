@@ -1,0 +1,11 @@
+# Link the C runtime statically on Windows so multiblend.exe needs no
+# Visual C++ redistributable (only system DLLs).
+#
+# Static Linux builds use glibc with +crt-static, which is set in the CI build
+# step instead of here: for *-linux-gnu it must not apply to host build
+# scripts or proc macros, which it would for builds without --target.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
