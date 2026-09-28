@@ -52,8 +52,11 @@ pub struct Options {
     pub inputs: Vec<Input>,
 }
 
-pub const BANNER: &str =
-    "Multiblend v2.0.0 (c) 2021 David Horman        http://horman.net/multiblend/\n";
+pub const BANNER: &str = concat!(
+    "Multiblend v",
+    env!("CARGO_PKG_VERSION"),
+    " (c) 2021 David Horman        http://horman.net/multiblend/\n"
+);
 pub const RULE: &str =
     "----------------------------------------------------------------------------\n";
 

@@ -168,6 +168,22 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - name: Check the tag matches the crate version and has changelog notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          crate=$(sed -n 's/^version = "\(.*\)"$/\1/p' rust/Cargo.toml | head -1)
+          if [ "$version" != "$crate" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match rust/Cargo.toml version $crate"; exit 1
+          fi
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' rust/CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::no '## [$version]' section in rust/CHANGELOG.md"; exit 1
+          fi
+          cat notes.md
       - uses: actions/download-artifact@v4
         with: { path: artifacts }
       - name: Package
@@ -180,7 +196,9 @@ jobs:
             dir="multiblend-$tag-$name"
             mkdir "$dir"
             cp artifacts/multiblend-$name/* "$dir/"
-            cp LICENSE README.md SOURCE.txt "$dir/"
+            cp LICENSE SOURCE.txt "$dir/"
+            cp rust/README.md "$dir/README.md"
+            cp rust/CHANGELOG.md "$dir/"
             chmod +x "$dir"/multiblend* || true
             if [[ $name == windows-* ]]; then
               zip -qr "release/$dir.zip" "$dir"
@@ -195,4 +213,4 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" release/* \
             --title "multiblend $GITHUB_REF_NAME" \
-            --notes "Dependency-free builds of the Rust port. Linux binaries are fully static (glibc, Linux 3.2+); the Windows executable needs no Visual C++ runtime but is not code-signed, so SmartScreen may warn. See SOURCE.txt for the source code (GPLv3)."
+            --notes-file notes.md
