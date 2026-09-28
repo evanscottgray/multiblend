@@ -1,0 +1,12 @@
+[package]
+name = "multiblend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+jpeg-encoder = "0.7.1"
+png = "0.18.1"
+rayon = "1.12.0"
+tiff = "0.11.3"
+weezl = "0.2.1"
+zune-jpeg = "0.5.15"
